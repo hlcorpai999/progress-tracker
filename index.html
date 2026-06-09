@@ -3202,9 +3202,79 @@ function saveF(el){
   _push();
 }
 
+function sortTasksByStatus(){
+  /* 針對每個 proj+phase 群組，把完成的任務移到最後 */
+  const groups=[...new Set(TASKS.map(t=>t.proj+'||'+t.phase))];
+  groups.forEach(key=>{
+    const [proj,phase]=key.split('||');
+    const indices=TASKS.map((t,i)=>({t,i})).filter(({t})=>t.proj===proj&&t.phase===phase);
+    if(!indices.length) return;
+    const notDone=indices.filter(({t})=>t.status!=='完成');
+    const done=indices.filter(({t})=>t.status==='完成');
+    const sorted=[...notDone,...done].map(({t})=>t);
+    indices.forEach(({i},n)=>{ TASKS[i]=sorted[n]; });
+  });
+}
+
 function updateTaskStatus(sel){
   const t=TASKS.find(x=>x.id===parseInt(sel.dataset.id));
-  if(t){t.status=sel.value;sel.className="ssel "+sCls(sel.value);updateStatsAndFilters();_push();}
+  if(!t) return;
+  const prev=t.status;
+  const needsMove=(sel.value==="完成" && prev!=="完成")||(sel.value!=="完成" && prev==="完成");
+  t.status=sel.value;
+  const samePh=()=>TASKS.map((x,i)=>({x,i})).filter(({x})=>x.proj===t.proj&&x.phase===t.phase);
+  if(t.status==="完成" && prev!=="完成"){
+    const idxNow=TASKS.indexOf(t);
+    TASKS.splice(idxNow,1);
+    const peers=samePh();
+    const lastPeer=peers.length?peers[peers.length-1].i:-1;
+    TASKS.splice(lastPeer+1,0,t);
+  } else if(t.status!=="完成" && prev==="完成"){
+    const idxNow=TASKS.indexOf(t);
+    TASKS.splice(idxNow,1);
+    const peers=samePh();
+    const firstDone=peers.find(({x})=>x.status==="完成");
+    if(firstDone) TASKS.splice(firstDone.i,0,t);
+    else{ const lastPeer=peers.length?peers[peers.length-1].i:-1; TASKS.splice(lastPeer+1,0,t); }
+  }
+  sel.className="ssel "+sCls(sel.value);
+  if(needsMove){
+    /* FLIP 動畫：記錄所有 tp-row 的舊位置 */
+    const before={};
+    document.querySelectorAll('.tp-row[data-tid]').forEach(el=>{
+      before[el.dataset.tid]=el.getBoundingClientRect();
+    });
+    renderAll();
+    updateStatsAndFilters();
+    _push();
+    /* After：找出位移並播放動畫 */
+    document.querySelectorAll('.tp-row[data-tid]').forEach(el=>{
+      const tid=el.dataset.tid;
+      const b=before[tid];
+      if(!b) return;
+      const a=el.getBoundingClientRect();
+      const dy=b.top-a.top;
+      if(Math.abs(dy)<1) return;
+      el.style.transition='none';
+      el.style.transform=`translateY(${dy}px)`;
+      el.style.background='var(--sur)';
+      el.style.position='relative';
+      el.style.zIndex='10';
+      requestAnimationFrame(()=>{
+        el.style.transition='transform 1s cubic-bezier(0.25,0.8,0.25,1)';
+        el.style.transform='translateY(0)';
+        el.addEventListener('transitionend',()=>{
+          el.style.transition='';
+          el.style.transform='';
+          el.style.background='';
+          el.style.position='';
+          el.style.zIndex='';
+        },{once:true});
+      });
+    });
+  } else {
+    updateStatsAndFilters();_push();
+  }
 }
 function updateDStatus(sel,projId,delivId){
   DSTATUS[dKey(projId,delivId)]=sel.value;
@@ -3467,6 +3537,7 @@ _ref.on("value", snap => {
   if(d.TASKS)    TASKS    = d.TASKS;
   if(d.DSTATUS)  DSTATUS  = d.DSTATUS;
   if(d.PROJECTS) PROJECTS = d.PROJECTS;
+  sortTasksByStatus();
   if(d.title){ const el=document.getElementById("hd-title"); if(el&&document.activeElement!==el) el.innerText=d.title; }
   if(d.meta) { const el=document.getElementById("hd-meta");  if(el&&document.activeElement!==el) el.innerText=d.meta; }
   nextId = Math.max(300, ...TASKS.map(t=>t.id+1));
