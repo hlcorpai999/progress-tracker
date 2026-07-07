@@ -353,7 +353,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--tx);font-size:14px
   font-family:var(--font);font-size:13px;width:100%;padding:5px 7px;
   border:1px solid var(--acc);border-radius:var(--r);outline:none;background:var(--sur);color:var(--tx)
 }
-.new-task-row textarea{font-size:12px;min-height:38px;resize:none}
+.new-task-row textarea{font-size:12px;min-height:38px;resize:none;overflow:hidden;word-break:break-all}
 .new-task-row .tp-cell{align-items:flex-start;display:flex;flex-direction:column;justify-content:flex-start;gap:3px}
 .btn-ok{font-family:var(--font);font-size:12px;padding:4px 10px;border-radius: 99px;white-space:nowrap;
   border:1px solid var(--green-bd);background:var(--green-bg);color:var(--green-tx);cursor:pointer;transition: all 0.2s ease;}
@@ -3146,6 +3146,10 @@ function taskRowHTML(t){
 }
 
 /* ─── inline add row ─── */
+function autoGrowTA(el){
+  el.style.height='auto';
+  el.style.height=el.scrollHeight+'px';
+}
 function showAddRow(projId, phaseId, containerId, delivId){
   const c=document.getElementById(containerId);
   if(!c)return;
@@ -3154,7 +3158,7 @@ function showAddRow(projId, phaseId, containerId, delivId){
   const todayStr = `${now.getMonth() + 1}/${now.getDate()}`;
   const uid=`nr-${projId}-${phaseId}-${delivId||"gen"}`;
   c.innerHTML=`<div class="new-task-row" id="${uid}" style="display: flex; align-items: center;">
-    <div class="tp-cell col-task"><input id="${uid}-task" placeholder="作業內容…" autocomplete="off"></div>
+    <div class="tp-cell col-task"><textarea id="${uid}-task" placeholder="作業內容…" rows="1" oninput="autoGrowTA(this)"></textarea></div>
     <div class="tp-cell col-detail"><input id="${uid}-detail" placeholder="細項說明（選填）"></div>
     <div class="tp-cell col-person">
       <input id="${uid}-person" placeholder="責任人" style="width:100%">
