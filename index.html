@@ -3182,7 +3182,9 @@ function confirmAdd(projId,phaseId,uid,containerId,delivId){
   const due=_dueRaw||`${_now.getMonth()+1}/${_now.getDate()}`;
   const newTask={id:nextId++,proj:projId,phase:phaseId,task,detail,persons:[person],due,status:"待辦"};
   if(delivId) newTask.delivId=delivId;
-  TASKS.push(newTask);
+  const groupIdxs=TASKS.map((t,i)=>i).filter(i=>TASKS[i].proj===projId&&TASKS[i].phase===phaseId);
+  if(groupIdxs.length) TASKS.splice(groupIdxs[0],0,newTask);
+  else TASKS.push(newTask);
   renderAll();_push();toast("已新增");
 }
 
