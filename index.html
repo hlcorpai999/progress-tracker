@@ -299,17 +299,17 @@ let _authUser = null; /* 目前登入的 firebase auth user 物件 */
 
 function recomputeCurrentUser(){
   if(!_authUser){ currentUser=null; return; }
-  const email=_authUser.email, uid=_authUser.uid;
+  const email=_authUser.email, uid=_authUser.uid, displayName=_authUser.displayName||email;
   const isAdmin = email===ADMIN_EMAIL;
   const rec = USERS[uid];
   if(isAdmin){
-    currentUser={email,uid,nickname:"管理員",isAdmin:true};
+    currentUser={email,uid,displayName,nickname:"管理員",isAdmin:true};
   } else if(rec && rec.status==="approved"){
-    currentUser={email,uid,nickname:rec.nickname,isAdmin:false};
+    currentUser={email,uid,displayName,nickname:rec.nickname,isAdmin:false};
   } else if(rec && rec.status==="pending"){
-    currentUser={email,uid,nickname:rec.nickname,isAdmin:false,pending:true};
+    currentUser={email,uid,displayName,nickname:rec.nickname,isAdmin:false,pending:true};
   } else {
-    currentUser={email,uid,nickname:null,isAdmin:false,needsNickname:true};
+    currentUser={email,uid,displayName,nickname:null,isAdmin:false,needsNickname:true};
   }
   /* 只有管理員或已核准的人，規則才允許讀取任務資料 */
   if(currentUser.isAdmin || (!currentUser.pending && !currentUser.needsNickname)){
@@ -439,12 +439,21 @@ function taskRowHtml(t, kind, projId, wiId){
   </div>`;
 }
 
+/* 收合/展開狀態：統一用「是否收合」為準，未設定過時套用預設值 */
+function isClosed(key, defaultClosed){
+  return expandState.hasOwnProperty(key) ? expandState[key] : defaultClosed;
+}
+function toggleKey(key, defaultClosed){
+  expandState[key] = !isClosed(key, defaultClosed);
+  renderApp();
+}
+
 /* ============================================================
    一般事務工作
    ============================================================ */
 function renderGeneralSection(){
   const key="__general";
-  const closed = expandState[key]===false;
+  const closed = isClosed(key, false);
   const list = GENERAL.filter(taskVisible);
   const rows = list.map(t=>`<tr data-id="${t.id}">
     <td class="seq-col">${t.seq}</td>
@@ -456,7 +465,7 @@ function renderGeneralSection(){
   </tr>`).join("");
 
   return `<div class="card section-block sec-wrap ${closed?"closed":""}" data-key="${key}">
-    <div class="sec-hd" onclick="toggleSectionKey('${key}',this)">
+    <div class="sec-hd" onclick="toggleKey('${key}',false)">
       <svg class="chev" viewBox="0 0 14 14"><path d="M2 5l5 5 5-5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
       <span class="sec-title">一般事務工作</span>
       <button class="history-btn danger-outline" onclick="event.stopPropagation();openHistory('__general')">歷程</button>
@@ -507,8 +516,8 @@ function delivIconHtml(st){
 function renderWorkitem(proj,wi){
   const w=workitemById(wi);
   const key=proj+"__"+wi;
-  const closed = expandState[key]===false ? true : (expandState[key]===true?false:workitemState(proj,wi)!=="active");
   const st=workitemState(proj,wi);
+  const closed = isClosed(key, st!=="active");
   const {done,total}=workitemBadge(proj,wi);
   const dotCls = st==="done"?"done":st==="active"?"active":"";
   const badgeCls = st==="done"?"done":st==="active"?"wip":"";
@@ -526,7 +535,7 @@ function renderWorkitem(proj,wi){
 
   return `<div class="wi-block ${closed?"closed":""}" data-key="${key}">
     <div class="wi-dot ${dotCls}"></div>
-    <div class="wi-hd" onclick="toggleWorkitem('${key}',this)">
+    <div class="wi-hd" onclick="toggleKey('${key}',${st!=="active"})">
       <span class="wi-num">${w.num}</span>
       <span class="wi-label">${esc(w.label)}</span>
       <span class="wi-badge ${badgeCls}">${done}/${total}</span>
@@ -544,23 +553,26 @@ function renderWorkitem(proj,wi){
   </div>`;
 }
 function renderProject(proj){
+  const key="proj_"+proj.id;
+  const closed = isClosed(key, false);
   return `<div class="proj-row">
-    <div class="proj-hd" onclick="toggleWorkitem('proj_${proj.id}',this,true)">
+    <div class="proj-hd" onclick="toggleKey('${key}',false)">
+      <svg class="wi-chev" viewBox="0 0 14 14" style="transform:rotate(${closed?-90:0}deg)"><path d="M2 5l5 5 5-5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
       <span class="proj-dot" style="background:${PAL[proj.ci%PAL.length]}"></span>
       <span class="proj-name">${esc(proj.name)}</span>
       <button class="history-btn danger-outline" onclick="event.stopPropagation();openHistory('${proj.id}')">歷程</button>
     </div>
-    <div class="wi-timeline">
+    ${closed?"":`<div class="wi-timeline">
       ${WORKITEMS.map(w=>renderWorkitem(proj.id,w.id)).join("")}
-    </div>
+    </div>`}
   </div>`;
 }
 function renderDevSection(){
   const key="__dev";
-  const closed = expandState[key]===false;
+  const closed = isClosed(key, false);
   const filteredProjects = activeFilters.proj ? PROJECTS.filter(p=>p.id===activeFilters.proj) : PROJECTS;
   return `<div class="card sec-wrap ${closed?"closed":""}" data-key="${key}">
-    <div class="sec-hd" onclick="toggleSectionKey('${key}',this)">
+    <div class="sec-hd" onclick="toggleKey('${key}',false)">
       <svg class="chev" viewBox="0 0 14 14"><path d="M2 5l5 5 5-5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
       <span class="sec-title">開發專案</span>
     </div>
@@ -740,21 +752,8 @@ document.addEventListener("blur", function(e){
 }, true);
 
 /* ============================================================
-   收合狀態
+   （收合狀態切換已統一改用上方的 isClosed()/toggleKey()）
    ============================================================ */
-function toggleSectionKey(key,el){
-  expandState[key] = expandState[key]===false ? true : (expandState[key]===undefined?false:!expandState[key]);
-  renderApp();
-}
-function toggleWorkitem(key,el,isProj){
-  if(isProj){
-    expandState[key] = expandState[key]===false ? true : (expandState[key]===undefined?false:!expandState[key]);
-  } else {
-    const cur = expandState[key]===undefined ? (workitemState(...key.split("__"))!=="active") : !expandState[key];
-    expandState[key] = !cur;
-  }
-  renderApp();
-}
 
 /* ============================================================
    Header / Stats / Filters
@@ -774,10 +773,10 @@ function renderHeader(){
       </div>
       <div class="top-actions">
         <span class="sync-dot"><span class="d"></span>已同步</span>
-        <span class="dept-tag">台灣信隆先進發展部</span>
+        <span class="dept-tag">${currentUser?esc(currentUser.displayName||currentUser.nickname||currentUser.email):"台灣信隆先進發展部"}</span>
         <button onclick="window.print()">列印</button>
         ${adminBtn}
-        ${currentUser?`<button onclick="signOut()">登出 (${esc(currentUser.nickname||currentUser.email)})</button>`:""}
+        ${currentUser?`<button onclick="signOut()">登出</button>`:""}
       </div>
     </div>
   </div>`;
