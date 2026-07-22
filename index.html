@@ -93,6 +93,7 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 .wi-body{padding:4px 6px 12px 6px}
 .wi-inner{border:1px solid var(--bd2);border-radius:var(--radius);display:flex;overflow:hidden}
 .deliv-col{width:170px;flex-shrink:0;border-right:1px solid var(--bd);background:var(--sur)}
+.deliv-col-hd{font-size:10px;text-transform:uppercase;color:var(--tx3);padding:6px 10px;background:var(--sur1);border-bottom:1px solid var(--bd)}
 .deliv-item{display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid var(--bd);cursor:pointer}
 .deliv-item:last-child{border-bottom:none}
 .deliv-item:hover{background:var(--sur1)}
@@ -106,12 +107,12 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 .task-tbl{flex:1;min-width:0}
 .t-row{display:flex;border-bottom:1px solid var(--bd)}
 .t-row:last-child{border-bottom:none}
+.t-row.hd-row{background:var(--sur1)}
+.t-row.hd-row .t-cell{font-size:10px;text-transform:uppercase;color:var(--tx3);padding:6px 8px}
 .t-cell{padding:8px;border-right:1px solid var(--bd)}
 .t-cell:last-child{border-right:none}
 .c-task{flex:1;min-width:0}
 .c-task .ttl{font-size:13px;outline:none;min-height:18px}
-.c-task .bul{font-size:11px;color:var(--tx2);margin-top:2px;padding-left:14px}
-.c-task .bul li{margin-bottom:1px}
 .c-due{width:52px;text-align:center;font-size:12px}
 .c-person{width:110px}
 .c-status{width:64px}
@@ -131,6 +132,15 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 .del-btn:hover{color:var(--red)}
 .add-task-btn{font-size:12px;color:var(--tx3);padding:8px;cursor:pointer}
 .add-task-btn:hover{color:var(--tx)}
+
+/* 新增作業 草稿列 */
+.t-row.draft-row{background:#fafbfd}
+.draft-input{width:100%;border:1px solid var(--blue);border-radius:6px;padding:5px 8px;font-size:13px}
+.draft-due-input{width:100%;border:1px solid var(--bd2);border-radius:6px;padding:5px 6px;font-size:12px;text-align:center}
+.draft-actions{display:flex;flex-direction:column;gap:4px;width:70px;flex-shrink:0}
+.draft-actions button{font-size:11px;padding:4px 8px;border-radius:20px}
+.draft-actions .confirm-btn{background:var(--green-bg);color:var(--green-tx);border-color:var(--green-bg)}
+.draft-actions .cancel-btn{background:var(--sur1);color:var(--tx3)}
 
 .admin-controls{display:flex;gap:4px;margin-top:4px}
 .admin-controls button{font-size:10px;padding:2px 6px}
@@ -327,6 +337,7 @@ function ensureUsersListener(){
     _maybeReady();
   }, err=>{
     usersReady=true; /* 讀取被拒絕(例如尚未登入)也視為完成一次，避免卡住 */
+    _lastError = "users: " + (err && err.message ? err.message : err);
     _maybeReady();
   });
 }
@@ -347,6 +358,7 @@ function ensureDataListener(){
     _maybeReady();
   }, err=>{
     dataReady=true;
+    _lastError = "data: " + (err && err.message ? err.message : err);
     _maybeReady();
   });
 }
@@ -389,15 +401,109 @@ function approvedNicknames(){
 function pendingCount(){ return Object.values(USERS).filter(u=>u.status==="pending").length; }
 
 /* ============================================================
-   任務內容渲染（標題 + 條列細節）
+   任務內容渲染（單純一行標題）
    ============================================================ */
-function taskContentHtml(task,detail){
-  const lines=(detail||"").split("\n").map(s=>s.trim()).filter(Boolean);
-  let h=`<div class="ttl" contenteditable="true" spellcheck="false" data-field="task">${esc(task)}</div>`;
-  if(lines.length){
-    h+=`<ul class="bul">${lines.map(l=>`<li>${esc(l)}</li>`).join("")}</ul>`;
+function taskContentHtml(task){
+  return `<div class="ttl" contenteditable="true" spellcheck="false" data-field="task">${esc(task)}</div>`;
+}
+
+/* 欄位標題列（工作項目/執行綱要與結果為區塊本身標題，此處只需列出表格內的欄位） */
+function taskTableHeaderHtml(){
+  return `<div class="t-row hd-row">
+    <div class="t-cell c-task">作業內容</div>
+    <div class="t-cell c-due">截止日期</div>
+    <div class="t-cell c-person">責任人</div>
+    <div class="t-cell c-status">執行狀態</div>
+    <div class="t-cell c-report">執行情況說明</div>
+    <div class="t-cell c-act"></div>
+  </div>`;
+}
+
+/* ============================================================
+   新增作業 — 草稿列（確認新增／取消）
+   ============================================================ */
+let DRAFTS = {}; /* key -> {task, due, persons[]} */
+function draftKeyFor(kind,proj,wi){ return kind==="general" ? "__general" : `${proj}__${wi}`; }
+function startAddTask(kind,proj,wi){
+  const key=draftKeyFor(kind,proj,wi);
+  DRAFTS[key] = {kind,proj,wi,task:"",due:todayDueDefault(),persons:[]};
+  renderApp();
+}
+function cancelAddTask(key){
+  delete DRAFTS[key];
+  renderApp();
+}
+function updateDraftField(key,field,val){
+  if(DRAFTS[key]) DRAFTS[key][field]=val;
+}
+function confirmAddTask(key){
+  const d=DRAFTS[key];
+  if(!d) return;
+  const taskText=(d.task||"").trim();
+  if(!taskText){ toast("請輸入作業內容"); return; }
+  if(d.kind==="general"){
+    const seq=GENERAL.length? Math.max(...GENERAL.map(g=>g.seq))+1 : 1;
+    GENERAL.push({id:nextId++,seq,task:taskText,due:d.due||todayDueDefault(),persons:d.persons||[],report:"",status:"待執行",delayLocked:false});
+  } else {
+    TASKS.push({id:nextId++,proj:d.proj,wi:d.wi,task:taskText,due:d.due||todayDueDefault(),persons:d.persons||[],report:"",status:"待執行",delayLocked:false});
   }
-  return h;
+  delete DRAFTS[key];
+  _push(); renderApp();
+}
+function draftRowHtml(key){
+  const d=DRAFTS[key];
+  const personsHtml=(d.persons||[]).map((p,i)=>
+    `<span class="ptag">${esc(p)}<span class="x" onclick="removeDraftPerson('${key}',${i})">×</span></span>`
+  ).join("");
+  return `<div class="t-row draft-row">
+    <div class="t-cell c-task">
+      <input class="draft-input" placeholder="作業內容…" value="${esc(d.task)}" oninput="updateDraftField('${key}','task',this.value)">
+    </div>
+    <div class="t-cell c-due">
+      <input class="draft-due-input" value="${esc(d.due)}" oninput="updateDraftField('${key}','due',this.value)">
+    </div>
+    <div class="t-cell c-person">
+      ${personsHtml}
+      <button class="p-add" onclick="openDraftPersonPicker(event,'${key}')">＋</button>
+    </div>
+    <div class="t-cell c-status"><span class="badge todo">待執行</span></div>
+    <div class="t-cell c-report"></div>
+    <div class="t-cell c-act">
+      <div class="draft-actions">
+        <button class="confirm-btn" onclick="confirmAddTask('${key}')">確認新增</button>
+        <button class="cancel-btn" onclick="cancelAddTask('${key}')">取消</button>
+      </div>
+    </div>
+  </div>`;
+}
+function openDraftPersonPicker(evt,key){
+  evt.stopPropagation();
+  const d=DRAFTS[key]; if(!d) return;
+  const names = approvedNicknames();
+  const already = d.persons||[];
+  const options = names.filter(n=>!already.includes(n));
+  let box=document.getElementById("person-pop");
+  if(box) box.remove();
+  box=document.createElement("div");
+  box.id="person-pop";
+  box.style.cssText="position:absolute;background:var(--sur);border:1px solid var(--bd2);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.15);z-index:200;min-width:120px;max-height:200px;overflow:auto";
+  box.innerHTML = options.length ? options.map(n=>`<div style="padding:6px 12px;font-size:12px;cursor:pointer" onmouseover="this.style.background='var(--sur1)'" onmouseout="this.style.background=''" onclick="addDraftPerson('${key}','${n.replace(/'/g,"\\'")}')">${esc(n)}</div>`).join("")
+    : `<div style="padding:6px 12px;font-size:12px;color:var(--tx3)">沒有可加入的人</div>`;
+  document.body.appendChild(box);
+  const r=evt.target.getBoundingClientRect();
+  box.style.left=(r.left+window.scrollX)+"px";
+  box.style.top=(r.bottom+window.scrollY+4)+"px";
+  setTimeout(()=>{ document.addEventListener("click", function h(e){ if(!box.contains(e.target)){ box.remove(); document.removeEventListener("click",h);} }); },0);
+}
+function addDraftPerson(key,name){
+  const d=DRAFTS[key]; if(!d) return;
+  d.persons=d.persons||[]; if(!d.persons.includes(name)) d.persons.push(name);
+  const box=document.getElementById("person-pop"); if(box) box.remove();
+  renderApp();
+}
+function removeDraftPerson(key,idx){
+  const d=DRAFTS[key]; if(!d||!d.persons) return;
+  d.persons.splice(idx,1); renderApp();
 }
 
 /* ============================================================
@@ -420,7 +526,7 @@ function taskRowHtml(t, kind, projId, wiId){
   }
   return `<div class="t-row" data-id="${t.id}">
     <div class="t-cell c-task">
-      ${taskContentHtml(t.task,t.detail)}
+      ${taskContentHtml(t.task)}
       ${adminExtra}
     </div>
     <div class="t-cell c-due">
@@ -448,6 +554,27 @@ function toggleKey(key, defaultClosed){
   renderApp();
 }
 
+/* 一般事務工作 專用的表格式草稿列 */
+function draftRowTableHtml(key){
+  const d=DRAFTS[key];
+  const personsHtml=(d.persons||[]).map((p,i)=>
+    `<span class="ptag">${esc(p)}<span class="x" onclick="removeDraftPerson('${key}',${i})">×</span></span>`
+  ).join("");
+  return `<tr class="draft-row">
+    <td class="seq-col">—</td>
+    <td><input class="draft-input" placeholder="工作內容…" value="${esc(d.task)}" oninput="updateDraftField('${key}','task',this.value)"></td>
+    <td class="due-col"><input class="draft-due-input" value="${esc(d.due)}" oninput="updateDraftField('${key}','due',this.value)"></td>
+    <td class="person-col">${personsHtml}<button class="p-add" onclick="openDraftPersonPicker(event,'${key}')">＋</button></td>
+    <td class="status-col"><span class="badge todo">待執行</span></td>
+    <td class="report-col">
+      <div class="draft-actions" style="flex-direction:row">
+        <button class="confirm-btn" onclick="confirmAddTask('${key}')">確認新增</button>
+        <button class="cancel-btn" onclick="cancelAddTask('${key}')">取消</button>
+      </div>
+    </td>
+  </tr>`;
+}
+
 /* ============================================================
    一般事務工作
    ============================================================ */
@@ -457,12 +584,15 @@ function renderGeneralSection(){
   const list = GENERAL.filter(taskVisible);
   const rows = list.map(t=>`<tr data-id="${t.id}">
     <td class="seq-col">${t.seq}</td>
-    <td>${taskContentHtml(t.task,t.detail)}</td>
+    <td>${taskContentHtml(t.task)}</td>
     <td class="due-col">${esc(t.due)||"—"}</td>
     <td class="person-col">${(t.persons||[]).map((p,i)=>`<span class="ptag">${esc(p)}<span class="x" onclick="removePerson('general',${t.id},${i})">×</span></span>`).join("")}<button class="p-add" onclick="openPersonPicker(event,'general',${t.id})">＋</button></td>
     <td class="status-col"><span class="badge ${t.status==='完成'?'done':t.status==='執行中'?'wip':t.status==='延誤'?'late':'todo'}">${t.status}</span>${currentUser&&currentUser.isAdmin?`<div class="admin-controls">${t.status==='延誤'?`<button onclick="adminSetStatus('general',${t.id},'待執行')">待執行</button><button onclick="adminSetStatus('general',${t.id},'執行中')">執行中</button>`:""}<button onclick="adminComplete('general','',${t.id})">完成</button></div>`:""}</td>
     <td class="report-col"><div style="display:flex;gap:4px"><div class="rtext" contenteditable="true" data-field="report" style="flex:1">${esc(t.report)}</div><button class="upd-btn" onclick="clearReport('general',${t.id})">更新</button></div></td>
   </tr>`).join("");
+
+  const draftKey=draftKeyFor('general');
+  const draftRow = DRAFTS[draftKey] ? draftRowTableHtml(draftKey) : "";
 
   return `<div class="card section-block sec-wrap ${closed?"closed":""}" data-key="${key}">
     <div class="sec-hd" onclick="toggleKey('${key}',false)">
@@ -473,9 +603,9 @@ function renderGeneralSection(){
     <div class="sec-body">
       <table class="gen-table">
         <thead><tr><th>序號</th><th>工作內容</th><th>截止日期</th><th>責任人</th><th>執行狀態</th><th>執行情況說明</th></tr></thead>
-        <tbody id="general-rows">${rows}</tbody>
+        <tbody id="general-rows">${rows}${draftRow}</tbody>
       </table>
-      <div class="add-row-link" onclick="addGeneralTask()">＋ 新增事務</div>
+      ${DRAFTS[draftKey]?"":`<div class="add-row-link" onclick="startAddTask('general')">＋ 新增事務</div>`}
     </div>
   </div>`;
 }
@@ -488,7 +618,7 @@ function taskVisible(t){
   if(activeFilters.person && !(t.persons||[]).includes(activeFilters.person)) return false;
   if(activeFilters.search){
     const s=activeFilters.search.toLowerCase();
-    const hay=(t.task+" "+(t.detail||"")+" "+(t.persons||[]).join(",")).toLowerCase();
+    const hay=(t.task+" "+(t.persons||[]).join(",")).toLowerCase();
     if(!hay.includes(s)) return false;
   }
   return true;
@@ -532,6 +662,9 @@ function renderWorkitem(proj,wi){
 
   const tasks = TASKS.filter(t=>t.proj===proj && t.wi===wi && taskVisible(t));
   const taskRows = tasks.map(t=>taskRowHtml(t,'proj',proj,wi)).join("");
+  const draftKey=draftKeyFor('proj',proj,wi);
+  const draftRow = DRAFTS[draftKey] ? draftRowHtml(draftKey) : "";
+  const addBtn = DRAFTS[draftKey] ? "" : `<div class="add-task-btn" onclick="startAddTask('proj','${proj}','${wi}')">＋ 新增作業</div>`;
 
   return `<div class="wi-block ${closed?"closed":""}" data-key="${key}">
     <div class="wi-dot ${dotCls}"></div>
@@ -543,10 +676,15 @@ function renderWorkitem(proj,wi){
     </div>
     <div class="wi-body">
       <div class="wi-inner">
-        <div class="deliv-col">${delivHtml}</div>
+        <div class="deliv-col">
+          <div class="deliv-col-hd">執行綱要與結果</div>
+          ${delivHtml}
+        </div>
         <div class="task-tbl">
+          ${taskTableHeaderHtml()}
           ${taskRows}
-          <div class="add-task-btn" onclick="addProjectTask('${proj}','${wi}')">＋ 新增作業</div>
+          ${draftRow}
+          ${addBtn}
         </div>
       </div>
     </div>
@@ -681,17 +819,8 @@ function removePerson(kind,taskId,idx){
 }
 
 /* ============================================================
-   任務動作
+   任務動作（新增作業已改用 startAddTask/confirmAddTask/cancelAddTask 草稿機制）
    ============================================================ */
-function addProjectTask(proj,wi){
-  const t={id:nextId++,proj,wi,task:"新作業",detail:"",due:todayDueDefault(),persons:[],report:"",status:"待執行",delayLocked:false};
-  TASKS.push(t); _push(); renderApp();
-}
-function addGeneralTask(){
-  const seq=GENERAL.length? Math.max(...GENERAL.map(g=>g.seq))+1 : 1;
-  const t={id:nextId++,seq,task:"新事務",detail:"",due:todayDueDefault(),persons:[],report:"",status:"待執行",delayLocked:false};
-  GENERAL.push(t); _push(); renderApp();
-}
 function deleteTask(kind,id){
   if(!confirm("確定要刪除這筆任務？")) return;
   if(kind==="general"){ GENERAL=GENERAL.filter(t=>t.id!==id); } else { TASKS=TASKS.filter(t=>t.id!==id); }
@@ -864,13 +993,30 @@ function submitNickname(){
 /* 除錯輔助：瀏覽器主控台可執行 __debug() 查看目前完整狀態 */
 function __debug(){ return {PROJECTS,TASKS,GENERAL,DELIV_STATUS,HISTORY,USERS,currentUser,expandState}; }
 
+let _lastError = null;
 function renderApp(){
   const root=document.getElementById("app");
-  if(!fbReady){ root.innerHTML="載入中…"; return; }
+  if(!fbReady){
+    root.innerHTML = `載入中…`;
+    return;
+  }
   const gate=renderGate();
   if(gate){ root.innerHTML=gate; return; }
   root.innerHTML = renderHeader() + renderStats() + renderFilters() + renderGeneralSection() + renderDevSection();
 }
+
+/* 逾時保護：超過 8 秒還沒讀到資料，顯示明確錯誤畫面而不是一直卡住 */
+setTimeout(function(){
+  if(!fbReady){
+    const root=document.getElementById("app");
+    root.innerHTML = `<div class="gate-screen card">
+      <div class="title" style="color:var(--red-tx)">載入逾時</div>
+      <p style="font-size:13px;color:var(--tx2)">資料讀取超過 8 秒沒有回應，可能是網路問題、Firebase 規則設定，或瀏覽器擴充功能（例如廣告攔截器）擋住了必要的請求。</p>
+      <p style="font-size:12px;color:var(--tx3)">錯誤代碼：${esc(_lastError||"（沒有收到任何回應，可能連錯誤都沒被回報）")}</p>
+      <button class="primary" onclick="location.reload()">重新整理</button>
+    </div>`;
+  }
+}, 8000);
 </script>
 </body>
 </html>
