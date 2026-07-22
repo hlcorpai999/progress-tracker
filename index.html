@@ -37,10 +37,10 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 .admin-btn{position:relative}
 .admin-badge{position:absolute;top:-6px;right:-6px;background:var(--red);color:#fff;font-size:10px;font-weight:700;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center}
 
-.stats-bar{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px}
-.stat-chip{background:var(--sur);border:1px solid var(--bd);border-radius:var(--radius);padding:10px;text-align:center}
-.stat-chip .n{font-size:20px;font-weight:600}
-.stat-chip .l{font-size:11px;color:var(--tx3)}
+.stats-bar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.stat-chip{background:var(--sur);border:1px solid var(--bd);border-radius:var(--radius);padding:5px;text-align:center;width:110px;flex-shrink:0}
+.stat-chip .n{font-size:15px;font-weight:600}
+.stat-chip .l{font-size:9px;color:var(--tx3)}
 .stat-chip.done .n{color:var(--green-tx)} .stat-chip.done .l{color:var(--green-tx)}
 .stat-chip.wip .n{color:var(--amber-tx)} .stat-chip.wip .l{color:var(--amber-tx)}
 .stat-chip.late .n{color:var(--red-tx)} .stat-chip.late .l{color:var(--red-tx)}
@@ -70,12 +70,18 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 
 .proj-row{border-top:1px solid var(--bd)}
 .proj-hd{display:flex;align-items:center;gap:8px;padding:10px 16px;cursor:pointer}
+.proj-hd:hover{background:var(--sur1)}
 .proj-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
 .proj-name{font-size:14px;font-weight:600;flex:1}
+.proj-del-btn{background:none;border:none;color:var(--tx3);font-size:14px;padding:2px 6px;visibility:hidden;flex-shrink:0}
+.proj-hd:hover .proj-del-btn{visibility:visible}
+.proj-del-btn:hover{color:var(--red)}
+.add-proj-link{padding:10px 16px;font-size:12px;color:var(--tx3);cursor:pointer;border-top:1px solid var(--bd)}
+.add-proj-link:hover{color:var(--tx)}
 .history-btn{font-size:11px;padding:4px 10px}
 
 .wi-timeline{position:relative;padding:6px 16px 10px 36px}
-.wi-timeline::before{content:"";position:absolute;left:22px;top:6px;bottom:6px;width:1.5px;background:var(--bd2)}
+.wi-line{position:absolute;width:1.5px;background:var(--bd2);z-index:0;display:none}
 .wi-block{position:relative;margin-bottom:2px}
 .wi-dot{position:absolute;left:-22px;top:11px;width:12px;height:12px;border-radius:50%;border:2px solid var(--bd2);background:var(--sur);z-index:1}
 .wi-dot.done{background:var(--green);border-color:var(--green)}
@@ -114,9 +120,10 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 .c-task{flex:1;min-width:0}
 .c-task .ttl{font-size:13px;outline:none;min-height:18px}
 .c-due{width:76px;text-align:center;font-size:12px;white-space:nowrap}
+.c-seq{width:34px;flex-shrink:0;text-align:center;color:var(--tx3);font-size:12px}
 .c-person{width:110px}
-.c-status{width:64px}
-.c-report{width:1.3fr;flex:1.3;display:flex;align-items:flex-start;gap:4px}
+.c-status{width:98px;flex-shrink:0}
+.c-report{flex:1;min-width:0;display:flex;align-items:flex-start;gap:4px}
 .c-report .rtext{flex:1;font-size:12px;color:var(--tx2);outline:none;min-height:18px}
 .c-act{width:26px;display:flex;align-items:center;justify-content:center}
 .c-act-draft{width:100px;flex-shrink:0;display:flex;align-items:center;justify-content:center}
@@ -145,7 +152,7 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 
 .admin-controls{display:flex;gap:4px;margin-top:4px}
 .admin-controls button{font-size:10px;padding:2px 6px}
-.status-select{font-size:11px;padding:2px 4px;border-radius:20px;border:1px solid var(--bd2);background:var(--sur)}
+.status-select{width:100%;font-size:11px;padding:2px 4px;border-radius:20px;border:1px solid var(--bd2);background:var(--sur);box-sizing:border-box}
 
 .modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px}
 .modal-box{background:var(--sur);border-radius:12px;max-width:560px;width:100%;max-height:85vh;overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.2)}
@@ -211,7 +218,17 @@ const WORKITEMS = [
 ];
 function workitemById(id){ return WORKITEMS.find(w=>w.id===id); }
 
-const PAL = ["#2f9e6e","#378add","#a377d6","#e0824a","#d6588f"];
+const PAL = ["#2f9e6e","#378add","#a377d6","#e0824a","#d6588f"]; /* 舊資料相容用 */
+
+/* 新專案自動配色：用黃金角旋轉色相，確保新舊專案顏色彼此有明顯區隔、不重複、不相近 */
+function nextProjectColor(){
+  const idx = PROJECTS.length;
+  const hue = Math.round((idx * 137.508) % 360);
+  return `hsl(${hue},60%,42%)`;
+}
+function projectColor(proj){
+  return proj.color || PAL[proj.ci % PAL.length];
+}
 
 /* ── 全域資料（來自 Firebase）── */
 let PROJECTS = [
@@ -418,8 +435,9 @@ function taskContentHtml(task){
 }
 
 /* 欄位標題列（工作項目/執行綱要與結果為區塊本身標題，此處只需列出表格內的欄位） */
-function taskTableHeaderHtml(){
+function taskTableHeaderHtml(withSeq){
   return `<div class="t-row hd-row">
+    ${withSeq?`<div class="t-cell c-seq">序號</div>`:""}
     <div class="t-cell c-task">作業內容</div>
     <div class="t-cell c-due">截止日期</div>
     <div class="t-cell c-person">責任人</div>
@@ -466,6 +484,7 @@ function draftRowHtml(key){
     `<span class="ptag">${esc(p)}<span class="x" onclick="removeDraftPerson('${key}',${i})">×</span></span>`
   ).join("");
   return `<div class="t-row draft-row">
+    ${d.kind==="general"?`<div class="t-cell c-seq">—</div>`:""}
     <div class="t-cell c-task">
       <input class="draft-input" placeholder="作業內容…" value="${esc(d.task)}" oninput="updateDraftField('${key}','task',this.value)">
     </div>
@@ -547,6 +566,7 @@ function taskRowHtml(t, kind, projId, wiId){
     `<span class="ptag">${esc(p)}<span class="x" onclick="removePerson('${kind}',${t.id},${i})">×</span></span>`
   ).join("");
   return `<div class="t-row" data-id="${t.id}">
+    ${kind==="general"?`<div class="t-cell c-seq">${t.seq}</div>`:""}
     <div class="t-cell c-task">
       ${taskContentHtml(t.task)}
     </div>
@@ -575,58 +595,34 @@ function toggleKey(key, defaultClosed){
   renderApp();
 }
 
-/* 一般事務工作 專用的表格式草稿列 */
-function draftRowTableHtml(key){
-  const d=DRAFTS[key];
-  const personsHtml=(d.persons||[]).map((p,i)=>
-    `<span class="ptag">${esc(p)}<span class="x" onclick="removeDraftPerson('${key}',${i})">×</span></span>`
-  ).join("");
-  return `<tr class="draft-row">
-    <td class="seq-col">—</td>
-    <td><input class="draft-input" placeholder="工作內容…" value="${esc(d.task)}" oninput="updateDraftField('${key}','task',this.value)"></td>
-    <td class="due-col"><input class="draft-due-input" value="${esc(d.due)}" oninput="updateDraftField('${key}','due',this.value)"></td>
-    <td class="person-col">${personsHtml}<button class="p-add" onclick="openDraftPersonPicker(event,'${key}')">＋</button></td>
-    <td class="status-col"><span class="badge todo">待執行</span></td>
-    <td class="report-col">
-      <div class="draft-actions" style="flex-direction:row">
-        <button class="confirm-btn" onclick="confirmAddTask('${key}')">確認新增</button>
-        <button class="cancel-btn" onclick="cancelAddTask('${key}')">取消</button>
-      </div>
-    </td>
-  </tr>`;
-}
-
 /* ============================================================
    一般事務工作
    ============================================================ */
 function renderGeneralSection(){
   const key="__general";
-  const closed = isClosed(key, false);
+  const closed = isClosed(key, true); /* 預設收合，即使已有工作也不自動展開 */
   const list = GENERAL.filter(taskVisible);
-  const rows = list.map(t=>`<tr data-id="${t.id}">
-    <td class="seq-col">${t.seq}</td>
-    <td>${taskContentHtml(t.task)}</td>
-    <td class="due-col">${esc(t.due)||"—"}</td>
-    <td class="person-col">${(t.persons||[]).map((p,i)=>`<span class="ptag">${esc(p)}<span class="x" onclick="removePerson('general',${t.id},${i})">×</span></span>`).join("")}<button class="p-add" onclick="openPersonPicker(event,'general',${t.id})">＋</button></td>
-    <td class="status-col">${statusCellHtml(t,'general','')}</td>
-    <td class="report-col"><div style="display:flex;gap:4px"><div class="rtext" contenteditable="true" data-field="report" style="flex:1">${esc(t.report)}</div><button class="upd-btn" onclick="clearReport('general',${t.id})">更新</button></div></td>
-  </tr>`).join("");
+  const rows = list.map(t=>taskRowHtml(t,'general','')).join("");
 
   const draftKey=draftKeyFor('general');
-  const draftRow = DRAFTS[draftKey] ? draftRowTableHtml(draftKey) : "";
+  const draftRow = DRAFTS[draftKey] ? draftRowHtml(draftKey) : "";
+  const addBtn = DRAFTS[draftKey] ? "" : `<div class="add-task-btn" onclick="startAddTask('general')">＋ 新增事務</div>`;
 
   return `<div class="card section-block sec-wrap ${closed?"closed":""}" data-key="${key}">
-    <div class="sec-hd" onclick="toggleKey('${key}',false)">
+    <div class="sec-hd" onclick="toggleKey('${key}',true)">
       <svg class="chev" viewBox="0 0 14 14"><path d="M2 5l5 5 5-5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
       <span class="sec-title">一般事務工作</span>
       <button class="history-btn danger-outline" onclick="event.stopPropagation();openHistory('__general')">歷程</button>
     </div>
     <div class="sec-body">
-      <table class="gen-table">
-        <thead><tr><th>序號</th><th>工作內容</th><th>截止日期</th><th>責任人</th><th>執行狀態</th><th>執行情況說明</th></tr></thead>
-        <tbody id="general-rows">${rows}${draftRow}</tbody>
-      </table>
-      ${DRAFTS[draftKey]?"":`<div class="add-row-link" onclick="startAddTask('general')">＋ 新增事務</div>`}
+      <div class="wi-inner" style="border-top:none;border-left:none;border-right:none;border-radius:0">
+        <div class="task-tbl" style="width:100%">
+          ${taskTableHeaderHtml(true)}
+          ${rows}
+          ${draftRow}
+          ${addBtn}
+        </div>
+      </div>
     </div>
   </div>`;
 }
@@ -668,7 +664,7 @@ function renderWorkitem(proj,wi){
   const w=workitemById(wi);
   const key=proj+"__"+wi;
   const st=workitemState(proj,wi);
-  const closed = isClosed(key, st!=="active");
+  const closed = isClosed(key, true); /* 工作項目一律預設收合，需使用者自行點開 */
   const {done,total}=workitemBadge(proj,wi);
   const dotCls = st==="done"?"done":st==="active"?"active":"";
   const badgeCls = st==="done"?"done":st==="active"?"wip":"";
@@ -689,7 +685,7 @@ function renderWorkitem(proj,wi){
 
   return `<div class="wi-block ${closed?"closed":""}" data-key="${key}">
     <div class="wi-dot ${dotCls}"></div>
-    <div class="wi-hd" onclick="toggleKey('${key}',${st!=="active"})">
+    <div class="wi-hd" onclick="toggleKey('${key}',true)">
       <span class="wi-num">${w.num}</span>
       <span class="wi-label">${esc(w.label)}</span>
       <span class="wi-badge ${badgeCls}">${done}/${total}</span>
@@ -714,14 +710,19 @@ function renderWorkitem(proj,wi){
 function renderProject(proj){
   const key="proj_"+proj.id;
   const closed = isClosed(key, false);
+  const delBtn = (currentUser && currentUser.isAdmin)
+    ? `<button class="proj-del-btn" onclick="event.stopPropagation();deleteProject('${proj.id}')" title="刪除專案">✕</button>`
+    : "";
   return `<div class="proj-row">
     <div class="proj-hd" onclick="toggleKey('${key}',false)">
       <svg class="wi-chev" viewBox="0 0 14 14" style="transform:rotate(${closed?-90:0}deg)"><path d="M2 5l5 5 5-5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
-      <span class="proj-dot" style="background:${PAL[proj.ci%PAL.length]}"></span>
+      <span class="proj-dot" style="background:${projectColor(proj)}"></span>
       <span class="proj-name">${esc(proj.name)}</span>
       <button class="history-btn danger-outline" onclick="event.stopPropagation();openHistory('${proj.id}')">歷程</button>
+      ${delBtn}
     </div>
     ${closed?"":`<div class="wi-timeline">
+      <div class="wi-line"></div>
       ${WORKITEMS.map(w=>renderWorkitem(proj.id,w.id)).join("")}
     </div>`}
   </div>`;
@@ -737,8 +738,46 @@ function renderDevSection(){
     </div>
     <div class="sec-body">
       ${filteredProjects.map(renderProject).join("")}
+      <div class="add-proj-link" onclick="openAddProjectModal()">＋ 新增專案</div>
     </div>
   </div>`;
+}
+
+/* ============================================================
+   新增／刪除 專案
+   ============================================================ */
+function openAddProjectModal(){
+  showModal(`
+    <div class="modal-hd"><span>新增專案</span><button onclick="closeModal()">關閉</button></div>
+    <div class="modal-body">
+      <div class="mini-hd">專案名稱</div>
+      <input id="new-proj-name" placeholder="例：GX6、MX1…" style="width:100%">
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+        <button onclick="closeModal()">取消</button>
+        <button class="primary" onclick="confirmAddProject()">新增</button>
+      </div>
+    </div>`);
+}
+function confirmAddProject(){
+  const val=document.getElementById("new-proj-name").value.trim();
+  if(!val){ toast("請輸入專案名稱"); return; }
+  if(PROJECTS.some(p=>p.name===val)){ toast("已有相同名稱的專案"); return; }
+  const id="P"+(nextId++);
+  PROJECTS.push({id,name:val,color:nextProjectColor()});
+  _push(); closeModal(); renderApp();
+  toast(`專案「${val}」已新增`);
+}
+function deleteProject(projId){
+  if(!currentUser||!currentUser.isAdmin) return;
+  const proj=PROJECTS.find(p=>p.id===projId);
+  if(!proj) return;
+  if(!confirm(`確定要刪除「${proj.name}」專案嗎？這會同時刪除其下所有任務與歷程紀錄，且無法復原。`)) return;
+  PROJECTS=PROJECTS.filter(p=>p.id!==projId);
+  TASKS=TASKS.filter(t=>t.proj!==projId);
+  Object.keys(DELIV_STATUS).forEach(k=>{ if(k.startsWith(projId+"__")) delete DELIV_STATUS[k]; });
+  delete HISTORY[projId];
+  _push(); renderApp();
+  toast(`已刪除「${proj.name}」專案`);
 }
 
 /* ============================================================
@@ -1027,6 +1066,28 @@ function renderApp(){
   const gate=renderGate();
   if(gate){ root.innerHTML=gate; return; }
   root.innerHTML = renderHeader() + renderStats() + renderFilters() + renderGeneralSection() + renderDevSection();
+  syncTimelineLines();
+}
+
+/* 精確置中時間軸的垂直連接線：水平對齊圓點中心，垂直範圍不超出第一個/最後一個圓點 */
+function syncTimelineLines(){
+  if(typeof document.querySelectorAll !== "function") return;
+  document.querySelectorAll(".wi-timeline").forEach(tl=>{
+    const line = tl.querySelector(":scope > .wi-line");
+    const dots = tl.querySelectorAll(":scope > .wi-block > .wi-dot");
+    if(!line) return;
+    if(!dots.length){ line.style.display="none"; return; }
+    const tlRect = tl.getBoundingClientRect();
+    const first = dots[0].getBoundingClientRect();
+    const last = dots[dots.length-1].getBoundingClientRect();
+    const centerX = (first.left + first.width/2) - tlRect.left;
+    const topY = (first.top + first.height/2) - tlRect.top;
+    const botY = (last.top + last.height/2) - tlRect.top;
+    line.style.left = (centerX - 0.75) + "px";
+    line.style.top = topY + "px";
+    line.style.height = Math.max(0, botY - topY) + "px";
+    line.style.display = "block";
+  });
 }
 
 /* 逾時保護：超過 8 秒還沒讀到資料，顯示明確錯誤畫面而不是一直卡住 */
