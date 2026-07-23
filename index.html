@@ -313,9 +313,14 @@ function pushData(){
   _dataRef.set({ PROJECTS, TASKS, GENERAL, DELIV_STATUS, HISTORY, nextId })
     .catch(e=>toast("儲存失敗，請檢查網路"));
 }
-function pushUsers(){
+/* 使用者名單：每次只寫入「單一一筆」使用者的子節點，絕不整包覆蓋整份名單。
+   這是配合安全規則的必要做法——規則是「每個人只能寫自己那一筆」，
+   若整包覆蓋會同時觸碰到別人的資料，導致整個寫入被規則擋下。
+   dataOrNull 傳 null 代表要移除這筆使用者資料。 */
+function pushUserRecord(uid, dataOrNull){
   _suppressNextUsersEcho=true;
-  _usersRef.set(USERS).catch(e=>toast("儲存失敗，請檢查網路"));
+  const p = (dataOrNull===null) ? _usersRef.child(uid).remove() : _usersRef.child(uid).set(dataOrNull);
+  p.catch(e=>toast("儲存失敗，請檢查網路"));
 }
 /* 舊名保留相容：任何呼叫 _push() 的地方，一律視為資料異動 */
 function _push(){ pushData(); }
@@ -855,11 +860,11 @@ function openAdminPanel(){
       ${approvedHtml}
     </div>`);
 }
-function approveUser(k){ if(USERS[k]){ USERS[k].status="approved"; USERS[k].approvedAt=todayStr(); pushUsers(); openAdminPanel(); renderApp(); toast("已核准"); } }
-function rejectUser(k){ if(USERS[k]){ delete USERS[k]; pushUsers(); openAdminPanel(); renderApp(); toast("已拒絕"); } }
+function approveUser(k){ if(USERS[k]){ USERS[k].status="approved"; USERS[k].approvedAt=todayStr(); pushUserRecord(k, USERS[k]); openAdminPanel(); renderApp(); toast("已核准"); } }
+function rejectUser(k){ if(USERS[k]){ delete USERS[k]; pushUserRecord(k, null); openAdminPanel(); renderApp(); toast("已拒絕"); } }
 function removeUser(k){
   if(!confirm("確定要移除這位工程師的編輯權限嗎？")) return;
-  if(USERS[k]){ delete USERS[k]; pushUsers(); openAdminPanel(); renderApp(); toast("已移除"); }
+  if(USERS[k]){ delete USERS[k]; pushUserRecord(k, null); openAdminPanel(); renderApp(); toast("已移除"); }
 }
 
 /* ============================================================
@@ -1062,7 +1067,7 @@ function submitNickname(){
   if(dup){ toast("暱稱重複，請重新輸入"); return; }
   const k=currentUser.uid;
   USERS[k]={email:currentUser.email,nickname:val,status:"pending",requestedAt:todayStr()};
-  pushUsers();
+  pushUserRecord(k, USERS[k]);
   currentUser.nickname=val; currentUser.pending=true; currentUser.needsNickname=false;
   renderApp();
 }
