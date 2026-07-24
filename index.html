@@ -31,8 +31,8 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 .title{font-size:19px;font-weight:600}
 .subtitle{font-size:12px;color:var(--tx3);margin-top:4px}
 .top-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.sync-dot{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--tx2)}
-.sync-dot .d{width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block}
+.sync-dot{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2)}
+.sync-dot .d{width:9px;height:9px;border-radius:50%;background:var(--green);display:inline-block;border:1.5px solid var(--bd2);box-sizing:content-box}
 .sync-dot .d.off{background:var(--red)}
 .dept-tag{font-size:12px;background:var(--green-bg);color:var(--green-tx);padding:4px 12px;border-radius:20px}
 .admin-btn{position:relative}
@@ -120,7 +120,7 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 .t-cell:last-child{border-right:none}
 .c-task{flex:1;min-width:0}
 .c-task .ttl{font-size:13px;outline:none;min-height:18px}
-.c-due{width:76px;text-align:center;font-size:12px;white-space:nowrap}
+.c-due{width:128px;flex-shrink:0;text-align:center;font-size:12px;white-space:nowrap}
 .c-seq{width:34px;flex-shrink:0;text-align:center;color:var(--tx3);font-size:12px}
 .c-person{width:110px}
 .c-status{width:98px;flex-shrink:0}
@@ -145,7 +145,8 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 /* 新增作業 草稿列 */
 .t-row.draft-row{background:#fafbfd}
 .draft-input{width:100%;border:1px solid var(--blue);border-radius:6px;padding:5px 8px;font-size:13px}
-.draft-due-input{width:100%;border:1px solid var(--bd2);border-radius:6px;padding:5px 6px;font-size:12px;text-align:center}
+.draft-due-input,.due-input{width:100%;border:1px solid var(--bd2);border-radius:6px;padding:5px 6px;font-size:12px;text-align:center;box-sizing:border-box;background:var(--sur)}
+.draft-due-input{border-color:var(--acc,#378add)}
 .draft-actions{display:flex;flex-direction:column;gap:4px;width:70px;flex-shrink:0}
 .draft-actions button{font-size:11px;padding:4px 8px;border-radius:20px}
 .draft-actions .confirm-btn{background:var(--green-bg);color:var(--green-tx);border-color:var(--green-bg)}
@@ -268,8 +269,38 @@ function isOverdue(due){
   return dt.getTime() < now.getTime();
 }
 function todayDueDefault(){
+  return todayStr(); /* 改為完整 YYYY/MM/DD 格式 */
+}
+function todayISO(){
   const n=new Date();
-  return `${n.getMonth()+1}/${n.getDate()}`;
+  return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}-${String(n.getDate()).padStart(2,"0")}`;
+}
+/* 內部儲存格式 YYYY/MM/DD ←→ <input type="date"> 所需的 YYYY-MM-DD 格式，互相轉換 */
+function dueToISO(due){
+  if(!due) return "";
+  const parts=due.split("/").map(s=>s.trim());
+  if(parts.length===3){
+    return `${parts[0].padStart(4,"0")}-${parts[1].padStart(2,"0")}-${parts[2].padStart(2,"0")}`;
+  }
+  if(parts.length===2){ /* 相容舊資料的 M/D 格式，補上今年年份 */
+    const y=new Date().getFullYear();
+    return `${y}-${parts[0].padStart(2,"0")}-${parts[1].padStart(2,"0")}`;
+  }
+  return "";
+}
+function isoToDue(iso){
+  if(!iso) return "";
+  const p=iso.split("-");
+  if(p.length!==3) return "";
+  return `${p[0]}/${p[1]}/${p[2]}`;
+}
+/* 統一的「不可早於今天」防呆：回傳一個保證不早於今天的 YYYY/MM/DD 字串 */
+function clampDueNotPast(isoVal){
+  if(!isoVal || isoVal < todayISO()){
+    if(isoVal) toast("截止日期不能早於今天，已自動調整為今天");
+    return todayDueDefault();
+  }
+  return isoToDue(isoVal);
 }
 
 /* ── 狀態自動判斷：僅在資料載入(重新整理頁面)時執行一次 ── */
@@ -307,11 +338,25 @@ const _usersRef = _db.ref("taskSystemV2/users");
 
 let _online = true; /* 真實連線狀態偵測的結果，預設先假設為已連線 */
 
+/* 防呆：Firebase 不接受任何屬性值為 undefined，寫入前一律先深度清除，
+   避免日後任何欄位不慎變成 undefined 時，整批寫入被無聲無息拒絕 */
+function stripUndefinedDeep(val){
+  if(Array.isArray(val)) return val.map(stripUndefinedDeep);
+  if(val && typeof val==="object"){
+    const out={};
+    Object.keys(val).forEach(k=>{
+      if(val[k]!==undefined) out[k]=stripUndefinedDeep(val[k]);
+    });
+    return out;
+  }
+  return val;
+}
+
 let _suppressNextDataEcho=false, _suppressNextUsersEcho=false;
 function pushData(){
   _suppressNextDataEcho=true;
-  _dataRef.set({ PROJECTS, TASKS, GENERAL, DELIV_STATUS, HISTORY, nextId })
-    .catch(e=>toast("儲存失敗，請檢查網路"));
+  const payload = stripUndefinedDeep({ PROJECTS, TASKS, GENERAL, DELIV_STATUS, HISTORY, nextId });
+  _dataRef.set(payload).catch(e=>toast("儲存失敗，請檢查網路"));
 }
 /* 使用者名單：每次只寫入「單一一筆」使用者的子節點，絕不整包覆蓋整份名單。
    這是配合安全規則的必要做法——規則是「每個人只能寫自己那一筆」，
@@ -319,7 +364,7 @@ function pushData(){
    dataOrNull 傳 null 代表要移除這筆使用者資料。 */
 function pushUserRecord(uid, dataOrNull){
   _suppressNextUsersEcho=true;
-  const p = (dataOrNull===null) ? _usersRef.child(uid).remove() : _usersRef.child(uid).set(dataOrNull);
+  const p = (dataOrNull===null) ? _usersRef.child(uid).remove() : _usersRef.child(uid).set(stripUndefinedDeep(dataOrNull));
   p.catch(e=>toast("儲存失敗，請檢查網路"));
 }
 /* 舊名保留相容：任何呼叫 _push() 的地方，一律視為資料異動 */
@@ -511,7 +556,7 @@ function draftRowHtml(key){
       <input class="draft-input" placeholder="作業內容…" value="${esc(d.task)}" oninput="updateDraftField('${key}','task',this.value)">
     </div>
     <div class="t-cell c-due">
-      <input class="draft-due-input" value="${esc(d.due)}" oninput="updateDraftField('${key}','due',this.value)">
+      <input type="date" class="draft-due-input" min="${todayISO()}" value="${dueToISO(d.due)}" onchange="updateDraftField('${key}','due',clampDueNotPast(this.value));renderApp()">
     </div>
     <div class="t-cell c-person">
       ${personsHtml}
@@ -593,7 +638,7 @@ function taskRowHtml(t, kind, projId, wiId){
       ${taskContentHtml(t.task)}
     </div>
     <div class="t-cell c-due">
-      <div contenteditable="true" spellcheck="false" data-field="due">${esc(t.due)||"—"}</div>
+      <input type="date" class="due-input" min="${todayISO()}" value="${dueToISO(t.due)}" onchange="updateExistingDue('${kind}',${t.id},this.value)">
     </div>
     <div class="t-cell c-person">
       ${personsHtml}
@@ -807,22 +852,50 @@ function deleteProject(projId){
    ============================================================ */
 function openHistory(scopeId){
   const entries = HISTORY[scopeId] || [];
-  const rows = entries.map(e=>`<tr>
+  const isAdmin = currentUser && currentUser.isAdmin;
+  const rows = entries.map((e,idx)=>`<tr>
     <td>${esc(e.wiLabel||"")}</td>
-    <td>${esc(e.task)}${e.detail?`<div style="font-size:11px;color:var(--tx3)">${esc(e.detail)}</div>`:""}</td>
+    <td>${esc(e.task)}</td>
     <td>${esc(e.completedDate)}</td>
     <td>${esc((e.persons||[]).join("、"))}</td>
     <td>${esc(e.report||"—")}</td>
+    ${isAdmin?`<td><button onclick="unarchiveHistoryEntry('${scopeId}',${idx})">取消歸檔</button></td>`:""}
   </tr>`).join("");
   const title = scopeId==="__general" ? "一般事務工作 歷程" : ((PROJECTS.find(p=>p.id===scopeId)||{}).name||scopeId)+" 歷程";
   showModal(`
     <div class="modal-hd"><span>${title}</span><button onclick="closeModal()">關閉</button></div>
     <div class="modal-body">
       <table class="hist-table">
-        <thead><tr><th>工作項目</th><th>作業內容</th><th>完成日期</th><th>責任人</th><th>執行情況說明</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="5" style="color:var(--tx3)">尚無歷程紀錄</td></tr>`}</tbody>
+        <thead><tr><th>工作項目</th><th>作業內容</th><th>完成日期</th><th>責任人</th><th>執行情況說明</th>${isAdmin?"<th></th>":""}</tr></thead>
+        <tbody>${rows || `<tr><td colspan="${isAdmin?6:5}" style="color:var(--tx3)">尚無歷程紀錄</td></tr>`}</tbody>
       </table>
     </div>`);
+}
+
+/* 取消歸檔：把歷程裡的紀錄復原回原本的作業清單，重新變成可編輯、可追蹤的任務
+   （僅管理員可操作，跟「標記完成」的權限對稱）*/
+function unarchiveHistoryEntry(scopeId, idx){
+  if(!currentUser||!currentUser.isAdmin) return;
+  const list = HISTORY[scopeId];
+  if(!list || !list[idx]) return;
+  const e = list[idx];
+  if(!confirm(`確定要將「${e.task}」從歷程復原回作業清單嗎？`)) return;
+
+  if(scopeId==="__general"){
+    const seq = GENERAL.length ? Math.max(...GENERAL.map(g=>g.seq))+1 : 1;
+    const t = {id:nextId++, seq, task:e.task, due:todayDueDefault(), persons:e.persons||[], report:e.report||"", status:"待執行", delayLocked:false};
+    recomputeOne(t);
+    GENERAL.push(t);
+  } else {
+    const t = {id:nextId++, proj:scopeId, wi:e.wi||"", task:e.task, due:todayDueDefault(), persons:e.persons||[], report:e.report||"", status:"待執行", delayLocked:false};
+    recomputeOne(t);
+    TASKS.push(t);
+  }
+  list.splice(idx,1);
+  _push();
+  openHistory(scopeId); /* 重新整理彈出視窗內容 */
+  renderApp();
+  toast("已取消歸檔，任務已復原");
 }
 
 /* ============================================================
@@ -912,6 +985,14 @@ function clearReport(kind,id){
   const t=findTaskList(kind).find(x=>x.id===id);
   if(t){ t.report=""; _push(); renderApp(); }
 }
+function updateExistingDue(kind,id,isoVal){
+  const t=findTaskList(kind).find(x=>x.id===id);
+  if(!t) return;
+  t.due = clampDueNotPast(isoVal);
+  recomputeOne(t); /* 截止日期變動可能影響延誤判斷，立即重新計算 */
+  _push();
+  renderApp();
+}
 function adminSetStatus(kind,id,newStatus){
   if(!currentUser||!currentUser.isAdmin) return;
   const t=findTaskList(kind).find(x=>x.id===id);
@@ -923,14 +1004,14 @@ function adminComplete(kind,proj,id){
     const idx=GENERAL.findIndex(t=>t.id===id); if(idx<0) return;
     const t=GENERAL[idx];
     HISTORY["__general"]=HISTORY["__general"]||[];
-    HISTORY["__general"].push({wiLabel:"",task:t.task,detail:t.detail,completedDate:todayStr(),persons:t.persons,report:t.report});
+    HISTORY["__general"].push({wiLabel:"",wi:"",task:t.task,due:t.due||"",completedDate:todayStr(),persons:t.persons||[],report:t.report||""});
     GENERAL.splice(idx,1);
   } else {
     const idx=TASKS.findIndex(t=>t.id===id); if(idx<0) return;
     const t=TASKS[idx];
     const w=workitemById(t.wi);
     HISTORY[t.proj]=HISTORY[t.proj]||[];
-    HISTORY[t.proj].push({wiLabel:w?w.label:"",task:t.task,detail:t.detail,completedDate:todayStr(),persons:t.persons,report:t.report});
+    HISTORY[t.proj].push({wiLabel:w?w.label:"",wi:t.wi||"",task:t.task,due:t.due||"",completedDate:todayStr(),persons:t.persons||[],report:t.report||""});
     TASKS.splice(idx,1);
   }
   _push(); renderApp(); toast("已歸檔至歷程");
@@ -986,7 +1067,7 @@ function renderHeader(){
         <div class="subtitle">日期：${todayStr()}</div>
       </div>
       <div class="top-actions">
-        <span class="sync-dot"><span class="d ${_online?"":"off"}"></span>${_online?"已同步":"離線"}</span>
+        <span class="sync-dot"><span class="d ${_online?"":"off"}"></span>${_online?"連線中":"離線"}</span>
         <span class="dept-tag">${currentUser?esc(currentUser.displayName||currentUser.nickname||currentUser.email):"台灣信隆先進發展部"}</span>
         <button onclick="window.print()">列印</button>
         ${adminBtn}
