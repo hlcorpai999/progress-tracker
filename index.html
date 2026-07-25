@@ -172,8 +172,7 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 .hist-table td{padding:8px;border-bottom:1px solid var(--bd);font-size:12px;vertical-align:top}
 
 @media print{
-  .filter-bar,.stats-bar .stat-chip,.admin-btn,.add-task-btn,.del-btn,.p-add,.ptag .x,.upd-btn,.admin-controls,.history-btn{display:none!important}
-  .sec-wrap.closed .sec-body,.wi-block.closed .wi-body{display:block!important}
+  .filter-bar,.stats-bar .stat-chip,.admin-btn,.add-task-btn,.del-btn,.p-add,.ptag .x,.upd-btn,.admin-controls,.history-btn,.proj-del-btn,.add-proj-link{display:none!important}
 }
 </style>
 </head>
@@ -667,8 +666,10 @@ function toggleKey(key, defaultClosed){
    ============================================================ */
 function renderGeneralSection(){
   const key="__general";
-  const closed = isClosed(key, true); /* 預設收合，即使已有工作也不自動展開 */
   const list = GENERAL.filter(taskVisible);
+  const closed = hasActiveFilters()
+    ? list.length===0 /* 有篩選時：有符合的任務就展開，否則收合 */
+    : isClosed(key, true); /* 沒有篩選時：預設收合，即使已有工作也不自動展開 */
   const rows = list.map(t=>taskRowHtml(t,'general','')).join("");
 
   const draftKey=draftKeyFor('general');
@@ -727,11 +728,16 @@ function delivIconHtml(st){
   if(st==="進行中") return `<div class="deliv-icon wip">▶</div>`;
   return `<div class="deliv-icon todo">✕</div>`;
 }
+function workitemHasMatchingTask(proj,wi){
+  return TASKS.some(t=>t.proj===proj && t.wi===wi && taskVisible(t));
+}
 function renderWorkitem(proj,wi){
   const w=workitemById(wi);
   const key=proj+"__"+wi;
   const st=workitemState(proj,wi);
-  const closed = isClosed(key, true); /* 工作項目一律預設收合，需使用者自行點開 */
+  const closed = hasActiveFilters()
+    ? !workitemHasMatchingTask(proj,wi) /* 有篩選時：符合條件就展開，不符合就收合 */
+    : isClosed(key, true); /* 沒有篩選時：維持使用者手動/預設收合邏輯 */
   const {done,total}=workitemBadge(proj,wi);
   const dotCls = st==="done"?"done":st==="active"?"active":"";
   const badgeCls = st==="done"?"done":st==="active"?"wip":"";
@@ -774,9 +780,14 @@ function renderWorkitem(proj,wi){
     </div>
   </div>`;
 }
+function projectHasMatchingTask(projId){
+  return WORKITEMS.some(w=>workitemHasMatchingTask(projId,w.id));
+}
 function renderProject(proj){
   const key="proj_"+proj.id;
-  const closed = isClosed(key, false);
+  const closed = hasActiveFilters()
+    ? !projectHasMatchingTask(proj.id)
+    : isClosed(key, false);
   const delBtn = (currentUser && currentUser.isAdmin)
     ? `<button class="proj-del-btn" onclick="event.stopPropagation();deleteProject('${proj.id}')" title="刪除專案">✕</button>`
     : "";
@@ -784,7 +795,7 @@ function renderProject(proj){
     <div class="proj-hd" onclick="toggleKey('${key}',false)">
       <svg class="wi-chev" viewBox="0 0 14 14" style="transform:rotate(${closed?-90:0}deg)"><path d="M2 5l5 5 5-5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
       <span class="proj-dot" style="background:${projectColor(proj)}"></span>
-      <span class="proj-name">${esc(proj.name)}</span>
+      <span class="proj-name" contenteditable="true" spellcheck="false" data-proj-rename-id="${proj.id}" onclick="event.stopPropagation()">${esc(proj.name)}</span>
       <button class="history-btn danger-outline" onclick="event.stopPropagation();openHistory('${proj.id}')">歷程</button>
       ${delBtn}
     </div>
@@ -1043,7 +1054,32 @@ document.addEventListener("blur", function(e){
   /* 儲存後立即依規則重新判斷該筆任務的執行狀態（延誤一旦鎖定則不受此影響） */
   recomputeOne(t);
   _push();
-  renderApp();
+  /* 延後到下一個事件循環才重繪畫面：
+     避免「欄位失焦」跟「點擊同一列的按鈕（更新/刪除）」搶在同一個手勢裡，
+     導致畫面在點擊那一瞬間被整個換掉、使按鈕的點擊沒有真正生效 */
+  setTimeout(renderApp, 0);
+}, true);
+
+/* 專案名稱編輯：獨立處理，因為專案 id 是字串(如 GX5)，跟任務用的數字 id 不同命名空間 */
+document.addEventListener("blur", function(e){
+  const el=e.target;
+  if(!(el instanceof HTMLElement)) return;
+  const projId = el.dataset && el.dataset.projRenameId;
+  if(!projId) return;
+  const proj = PROJECTS.find(p=>p.id===projId);
+  if(!proj) return;
+  const val = el.innerText.trim();
+  if(!val){ el.innerText = proj.name; toast("專案名稱不能空白"); return; }
+  if(val!==proj.name && PROJECTS.some(p=>p.name===val)){
+    el.innerText = proj.name;
+    toast("已有相同名稱的專案");
+    return;
+  }
+  if(val!==proj.name){
+    proj.name = val;
+    _push();
+    setTimeout(renderApp, 0);
+  }
 }, true);
 
 /* ============================================================
@@ -1069,7 +1105,7 @@ function renderHeader(){
       <div class="top-actions">
         <span class="sync-dot"><span class="d ${_online?"":"off"}"></span>${_online?"連線中":"離線"}</span>
         <span class="dept-tag">${currentUser?esc(currentUser.displayName||currentUser.nickname||currentUser.email):"台灣信隆先進發展部"}</span>
-        <button onclick="window.print()">列印</button>
+        <button onclick="printSmart()">列印</button>
         ${adminBtn}
         ${currentUser?`<button onclick="signOut()">登出</button>`:""}
       </div>
@@ -1110,9 +1146,46 @@ function renderFilters(){
       <option ${activeFilters.status==="執行中"?"selected":""}>執行中</option>
       <option ${activeFilters.status==="延誤"?"selected":""}>延誤</option>
     </select>
-    <input placeholder="搜尋任務、負責人…" value="${esc(activeFilters.search)}" oninput="activeFilters.search=this.value;renderApp()">
+    <input id="search-filter-input" placeholder="搜尋任務、負責人…" value="${esc(activeFilters.search)}" oninput="activeFilters.search=this.value;renderApp()">
+    <button onclick="clearAllFilters()">取消</button>
   </div>`;
 }
+function hasActiveFilters(){
+  return !!(activeFilters.person || activeFilters.status || activeFilters.search);
+}
+function clearAllFilters(){
+  activeFilters = {proj:"",person:"",status:"",search:""};
+  renderApp();
+}
+
+/* ============================================================
+   智慧列印：只展開「符合目前篩選條件、且確實有任務」的區塊，
+   完全沒有內容的區塊維持收合（不佔版面），列印結束後自動還原畫面
+   ============================================================ */
+let _savedExpandStateForPrint = null;
+function printSmart(){
+  _savedExpandStateForPrint = JSON.parse(JSON.stringify(expandState));
+
+  expandState["__dev"] = false; /* 開發專案區塊本身一律展開 */
+  expandState["__general"] = GENERAL.filter(taskVisible).length===0;
+
+  PROJECTS.forEach(p=>{
+    expandState["proj_"+p.id] = !projectHasMatchingTask(p.id);
+    WORKITEMS.forEach(w=>{
+      expandState[p.id+"__"+w.id] = !workitemHasMatchingTask(p.id, w.id);
+    });
+  });
+
+  renderApp();
+  window.print();
+}
+window.addEventListener("afterprint", function(){
+  if(_savedExpandStateForPrint){
+    expandState = _savedExpandStateForPrint;
+    _savedExpandStateForPrint = null;
+    renderApp();
+  }
+});
 
 /* ============================================================
    登入前置畫面
@@ -1145,66 +1218,4 @@ function submitNickname(){
   const val=document.getElementById("nick-input").value.trim();
   if(!val){ toast("請輸入暱稱"); return; }
   const dup = Object.values(USERS).some(u=>u.nickname===val) || val==="管理員" || val===ADMIN_NICKNAME;
-  if(dup){ toast("暱稱重複，請重新輸入"); return; }
-  const k=currentUser.uid;
-  USERS[k]={email:currentUser.email,nickname:val,status:"pending",requestedAt:todayStr()};
-  pushUserRecord(k, USERS[k]);
-  currentUser.nickname=val; currentUser.pending=true; currentUser.needsNickname=false;
-  renderApp();
-}
-
-/* ============================================================
-   主渲染
-   ============================================================ */
-/* 除錯輔助：瀏覽器主控台可執行 __debug() 查看目前完整狀態 */
-function __debug(){ return {PROJECTS,TASKS,GENERAL,DELIV_STATUS,HISTORY,USERS,currentUser,expandState}; }
-
-let _lastError = null;
-function renderApp(){
-  const root=document.getElementById("app");
-  if(!fbReady){
-    root.innerHTML = `載入中…`;
-    return;
-  }
-  const gate=renderGate();
-  if(gate){ root.innerHTML=gate; return; }
-  root.innerHTML = renderHeader() + renderStats() + renderFilters() + renderGeneralSection() + renderDevSection();
-  syncTimelineLines();
-}
-
-/* 精確置中時間軸的垂直連接線：水平對齊圓點中心，垂直範圍不超出第一個/最後一個圓點 */
-function syncTimelineLines(){
-  if(typeof document.querySelectorAll !== "function") return;
-  document.querySelectorAll(".wi-timeline").forEach(tl=>{
-    const line = tl.querySelector(":scope > .wi-line");
-    const dots = tl.querySelectorAll(":scope > .wi-block > .wi-dot");
-    if(!line) return;
-    if(!dots.length){ line.style.display="none"; return; }
-    const tlRect = tl.getBoundingClientRect();
-    const first = dots[0].getBoundingClientRect();
-    const last = dots[dots.length-1].getBoundingClientRect();
-    const centerX = (first.left + first.width/2) - tlRect.left;
-    const topY = (first.top + first.height/2) - tlRect.top;
-    const botY = (last.top + last.height/2) - tlRect.top;
-    line.style.left = (centerX - 0.75) + "px";
-    line.style.top = topY + "px";
-    line.style.height = Math.max(0, botY - topY) + "px";
-    line.style.display = "block";
-  });
-}
-
-/* 逾時保護：超過 8 秒還沒讀到資料，顯示明確錯誤畫面而不是一直卡住 */
-setTimeout(function(){
-  if(!fbReady){
-    const root=document.getElementById("app");
-    root.innerHTML = `<div class="gate-screen card">
-      <div class="title" style="color:var(--red-tx)">載入逾時</div>
-      <p style="font-size:13px;color:var(--tx2)">資料讀取超過 8 秒沒有回應，可能是網路問題、Firebase 規則設定，或瀏覽器擴充功能（例如廣告攔截器）擋住了必要的請求。</p>
-      <p style="font-size:12px;color:var(--tx3)">錯誤代碼：${esc(_lastError||"（沒有收到任何回應，可能連錯誤都沒被回報）")}</p>
-      <button class="primary" onclick="location.reload()">重新整理</button>
-    </div>`;
-  }
-}, 8000);
-</script>
-</body>
-</html>
+  if(du
