@@ -99,7 +99,7 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 .wi-block.closed .wi-body{display:none}
 .wi-body{padding:4px 6px 12px 6px}
 .wi-inner{border:1px solid var(--bd2);border-radius:var(--radius);display:flex;overflow:hidden}
-.deliv-col{width:150px;flex-shrink:0;border-right:1px solid var(--bd);background:var(--sur)}
+.deliv-col{width:174px;flex-shrink:0;border-right:1px solid var(--bd);background:var(--sur)}
 .deliv-col-hd{font-size:10px;text-transform:uppercase;color:var(--tx3);padding:6px 10px;background:var(--sur2);border-bottom:1px solid var(--bd)}
 .deliv-item{display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid var(--bd);cursor:pointer}
 .deliv-item:last-child{border-bottom:none}
@@ -817,9 +817,14 @@ function renderProject(proj){
     </div>`}
   </div>`;
 }
+function devSectionHasMatchingTask(){
+  return PROJECTS.some(p=>projectHasMatchingTask(p.id));
+}
 function renderDevSection(){
   const key="__dev";
-  const closed = isClosed(key, false);
+  const closed = hasActiveFilters()
+    ? !devSectionHasMatchingTask() /* 有篩選時：底下任一專案有符合的任務就展開，否則收合 */
+    : isClosed(key, false);
   const filteredProjects = activeFilters.proj ? PROJECTS.filter(p=>p.id===activeFilters.proj) : PROJECTS;
   return `<div class="card sec-wrap ${closed?"closed":""}" data-key="${key}">
     <div class="sec-hd" onclick="toggleKey('${key}',false)">
