@@ -99,7 +99,7 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 .wi-block.closed .wi-body{display:none}
 .wi-body{padding:4px 6px 12px 6px}
 .wi-inner{border:1px solid var(--bd2);border-radius:var(--radius);display:flex;overflow:hidden}
-.deliv-col{width:170px;flex-shrink:0;border-right:1px solid var(--bd);background:var(--sur)}
+.deliv-col{width:150px;flex-shrink:0;border-right:1px solid var(--bd);background:var(--sur)}
 .deliv-col-hd{font-size:10px;text-transform:uppercase;color:var(--tx3);padding:6px 10px;background:var(--sur2);border-bottom:1px solid var(--bd)}
 .deliv-item{display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid var(--bd);cursor:pointer}
 .deliv-item:last-child{border-bottom:none}
@@ -171,8 +171,13 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 .hist-table th{font-size:10px;color:var(--tx3);text-align:left;padding:6px 8px;background:var(--sur1);border-bottom:1px solid var(--bd)}
 .hist-table td{padding:8px;border-bottom:1px solid var(--bd);font-size:12px;vertical-align:top}
 
+.print-only-text{display:none}
+
 @media print{
+  @page{ size: landscape; }
   .filter-bar,.stats-bar .stat-chip,.admin-btn,.add-task-btn,.del-btn,.p-add,.ptag .x,.upd-btn,.admin-controls,.history-btn,.proj-del-btn,.add-proj-link{display:none!important}
+  .no-print{display:none!important}
+  .print-only-text{display:inline!important;font-size:12px}
 }
 </style>
 </head>
@@ -608,9 +613,9 @@ function removeDraftPerson(key,idx){
 function statusCellHtml(t,kind,projId){
   const badgeCls = t.status==="完成"?"done":t.status==="執行中"?"wip":t.status==="延誤"?"late":"todo";
   if(!currentUser || !currentUser.isAdmin){
-    return `<span class="badge ${badgeCls}">${t.status}</span>`;
+    return `<span class="badge ${badgeCls} no-print">${t.status}</span>`;
   }
-  return `<select class="status-select" onchange="adminChangeStatus('${kind}','${projId||""}',${t.id},this.value)">
+  return `<select class="status-select no-print" onchange="adminChangeStatus('${kind}','${projId||""}',${t.id},this.value)">
     <option value="待執行" ${t.status==="待執行"?"selected":""}>待執行</option>
     <option value="執行中" ${t.status==="執行中"?"selected":""}>執行中</option>
     <option value="延誤" ${t.status==="延誤"?"selected":""}>延誤</option>
@@ -620,7 +625,13 @@ function statusCellHtml(t,kind,projId){
 function adminChangeStatus(kind,projId,id,newStatus){
   if(!currentUser||!currentUser.isAdmin) return;
   if(newStatus==="完成"){
-    if(!confirm("確定要將此任務標記為完成嗎？完成後會從清單移除，改存入「歷程」。")) return;
+    if(!confirm("確定要將此任務標記為完成嗎？完成後會從清單移除，改存入「歷程」。")){
+      /* 使用者取消：瀏覽器已經把下拉選單「視覺上」切到完成了，
+         強制重繪一次，換上全新的下拉選單元素，恢復顯示真實狀態，
+         避免舊的選單元素卡在不一致的狀態、後續選擇都沒反應 */
+      renderApp();
+      return;
+    }
     adminComplete(kind,projId,id);
   } else {
     adminSetStatus(kind,id,newStatus);
@@ -637,13 +648,14 @@ function taskRowHtml(t, kind, projId, wiId){
       ${taskContentHtml(t.task)}
     </div>
     <div class="t-cell c-due">
-      <input type="date" class="due-input" min="${todayISO()}" value="${dueToISO(t.due)}" onchange="updateExistingDue('${kind}',${t.id},this.value)">
+      <input type="date" class="due-input no-print" min="${todayISO()}" value="${dueToISO(t.due)}" onchange="updateExistingDue('${kind}',${t.id},this.value)">
+      <span class="print-only-text">${esc(t.due)||"—"}</span>
     </div>
     <div class="t-cell c-person">
       ${personsHtml}
       <button class="p-add" onclick="openPersonPicker(event,'${kind}',${t.id})">＋</button>
     </div>
-    <div class="t-cell c-status">${statusCellHtml(t,kind,projId)}</div>
+    <div class="t-cell c-status">${statusCellHtml(t,kind,projId)}<span class="print-only-text">${esc(t.status)}</span></div>
     <div class="t-cell c-report">
       <div class="rtext" contenteditable="true" spellcheck="false" data-field="report">${esc(t.report)}</div>
       <button class="upd-btn" onclick="clearReport('${kind}',${t.id})">更新</button>
@@ -787,12 +799,12 @@ function renderProject(proj){
   const key="proj_"+proj.id;
   const closed = hasActiveFilters()
     ? !projectHasMatchingTask(proj.id)
-    : isClosed(key, false);
+    : isClosed(key, true); /* 預設收合，只顯示專案名稱，需點擊才展開工作項目摘要列 */
   const delBtn = (currentUser && currentUser.isAdmin)
     ? `<button class="proj-del-btn" onclick="event.stopPropagation();deleteProject('${proj.id}')" title="刪除專案">✕</button>`
     : "";
   return `<div class="proj-row">
-    <div class="proj-hd" onclick="toggleKey('${key}',false)">
+    <div class="proj-hd" onclick="toggleKey('${key}',true)">
       <svg class="wi-chev" viewBox="0 0 14 14" style="transform:rotate(${closed?-90:0}deg)"><path d="M2 5l5 5 5-5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
       <span class="proj-dot" style="background:${projectColor(proj)}"></span>
       <span class="proj-name" contenteditable="true" spellcheck="false" data-proj-rename-id="${proj.id}" onclick="event.stopPropagation()">${esc(proj.name)}</span>
