@@ -1163,13 +1163,25 @@ function renderFilters(){
       <option ${activeFilters.status==="執行中"?"selected":""}>執行中</option>
       <option ${activeFilters.status==="延誤"?"selected":""}>延誤</option>
     </select>
-    <input id="search-filter-input" placeholder="搜尋任務、負責人…" value="${esc(activeFilters.search)}" oninput="activeFilters.search=this.value;renderApp()">
+    <input id="search-filter-input" placeholder="搜尋任務、負責人…" value="${esc(activeFilters.search)}" oninput="scheduleSearchUpdate(this.value)" oncompositionstart="setSearchComposing(true)" oncompositionend="setSearchComposing(false);scheduleSearchUpdate(this.value)">
     <button onclick="clearAllFilters()">取消</button>
   </div>`;
 }
 function hasActiveFilters(){
   return !!(activeFilters.person || activeFilters.status || activeFilters.search);
 }
+/* 搜尋欄位：輸入法(注音等)組字期間絕對不重繪畫面，避免輸入框被中途替換打斷組字；
+   一般輸入則延遲一小段時間才真正重繪，把連續按鍵合併成一次重繪，避免文字重複或卡頓 */
+let _isComposingSearch=false;
+let _searchDebounceTimer=null;
+function setSearchComposing(v){ _isComposingSearch = v; }
+function scheduleSearchUpdate(val){
+  activeFilters.search = val;
+  if(_isComposingSearch) return; /* 輸入法組字中，先不重繪 */
+  clearTimeout(_searchDebounceTimer);
+  _searchDebounceTimer = setTimeout(function(){ renderApp(); }, 300);
+}
+
 function clearAllFilters(){
   activeFilters = {proj:"",person:"",status:"",search:""};
   renderApp();
