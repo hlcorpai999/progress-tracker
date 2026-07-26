@@ -48,7 +48,6 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 
 .filter-bar{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
 .filter-bar select{flex:1;min-width:120px}
-.filter-bar input{flex:2;min-width:160px}
 
 .sec-hd{display:flex;align-items:center;gap:8px;padding:10px 16px;background:var(--sur1);cursor:pointer;user-select:none}
 .sec-hd .chev{width:16px;height:16px;transition:transform .2s}
@@ -250,7 +249,7 @@ let nextId = 1000;
 
 let currentUser = null; /* {email,nickname,isAdmin} 或 null */
 let expandState = {};   /* 通用收合狀態: key -> bool(展開) */
-let activeFilters = {proj:"",person:"",status:"",search:""};
+let activeFilters = {proj:"",person:"",status:""};
 let fbReady = false;
 
 function ekey(email){ return email.replace(/\./g,"_dot_").replace(/@/g,"_at_").replace(/[#$\[\]]/g,"_"); }
@@ -713,11 +712,6 @@ function renderGeneralSection(){
 function taskVisible(t){
   if(activeFilters.status && t.status!==activeFilters.status) return false;
   if(activeFilters.person && !(t.persons||[]).includes(activeFilters.person)) return false;
-  if(activeFilters.search){
-    const s=activeFilters.search.toLowerCase();
-    const hay=(t.task+" "+(t.persons||[]).join(",")).toLowerCase();
-    if(!hay.includes(s)) return false;
-  }
   return true;
 }
 function delivStatusOf(proj,wi,deliv){ return DELIV_STATUS[proj+"__"+wi+"__"+deliv] || "待辦"; }
@@ -1163,27 +1157,14 @@ function renderFilters(){
       <option ${activeFilters.status==="執行中"?"selected":""}>執行中</option>
       <option ${activeFilters.status==="延誤"?"selected":""}>延誤</option>
     </select>
-    <input id="search-filter-input" placeholder="搜尋任務、負責人…" value="${esc(activeFilters.search)}" oninput="scheduleSearchUpdate(this.value)" oncompositionstart="setSearchComposing(true)" oncompositionend="setSearchComposing(false);scheduleSearchUpdate(this.value)">
     <button onclick="clearAllFilters()">取消</button>
   </div>`;
 }
 function hasActiveFilters(){
-  return !!(activeFilters.person || activeFilters.status || activeFilters.search);
+  return !!(activeFilters.person || activeFilters.status);
 }
-/* 搜尋欄位：輸入法(注音等)組字期間絕對不重繪畫面，避免輸入框被中途替換打斷組字；
-   一般輸入則延遲一小段時間才真正重繪，把連續按鍵合併成一次重繪，避免文字重複或卡頓 */
-let _isComposingSearch=false;
-let _searchDebounceTimer=null;
-function setSearchComposing(v){ _isComposingSearch = v; }
-function scheduleSearchUpdate(val){
-  activeFilters.search = val;
-  if(_isComposingSearch) return; /* 輸入法組字中，先不重繪 */
-  clearTimeout(_searchDebounceTimer);
-  _searchDebounceTimer = setTimeout(function(){ renderApp(); }, 300);
-}
-
 function clearAllFilters(){
-  activeFilters = {proj:"",person:"",status:"",search:""};
+  activeFilters = {proj:"",person:"",status:""};
   renderApp();
 }
 
