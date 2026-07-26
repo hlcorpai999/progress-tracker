@@ -47,7 +47,10 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 .stat-chip.late .n{color:var(--red-tx)} .stat-chip.late .l{color:var(--red-tx)}
 
 .filter-bar{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
-.filter-bar select{flex:1;min-width:120px}
+.filter-bar select{flex:none;min-width:0}
+.filter-bar select.f-proj{width:150px}
+.filter-bar select.f-person{width:100px}
+.filter-bar select.f-status{width:100px}
 
 .sec-hd{display:flex;align-items:center;gap:8px;padding:10px 16px;background:var(--sur1);cursor:pointer;user-select:none}
 .sec-hd .chev{width:16px;height:16px;transition:transform .2s}
@@ -1143,15 +1146,15 @@ function renderStats(){
 function renderFilters(){
   const persons = approvedNicknames();
   return `<div class="filter-bar">
-    <select onchange="activeFilters.proj=this.value;renderApp()">
+    <select class="f-proj" onchange="activeFilters.proj=this.value;renderApp()">
       <option value="">全部專案</option>
       ${PROJECTS.map(p=>`<option value="${p.id}" ${activeFilters.proj===p.id?"selected":""}>${esc(p.name)}</option>`).join("")}
     </select>
-    <select onchange="activeFilters.person=this.value;renderApp()">
+    <select class="f-person" onchange="activeFilters.person=this.value;renderApp()">
       <option value="">全部負責人</option>
       ${persons.map(n=>`<option value="${n}" ${activeFilters.person===n?"selected":""}>${esc(n)}</option>`).join("")}
     </select>
-    <select onchange="activeFilters.status=this.value;renderApp()">
+    <select class="f-status" onchange="activeFilters.status=this.value;renderApp()">
       <option value="">全部狀態</option>
       <option ${activeFilters.status==="待執行"?"selected":""}>待執行</option>
       <option ${activeFilters.status==="執行中"?"selected":""}>執行中</option>
