@@ -248,7 +248,8 @@ let GENERAL = [];       /* 一般事務工作: {id,seq,task,due,persons[],report
 let DELIV_STATUS = {};  /* key proj__wi__deliv -> 待辦/進行中/完成 */
 let HISTORY = {};       /* key proj 或 "__general" -> [{wiLabel,task,detail,completedDate,persons,report}] */
 let USERS = {};         /* key = safe-email -> {email,nickname,status:"pending"/"approved",requestedAt,approvedAt} */
-let nextId = 1000;
+/* id 一律用 newDataId() 產生的 Firebase push key，不再用手動計數器(nextId)，
+   避免多人同時新增時算出同一個編號而互相碰撞 */
 
 let currentUser = null; /* {email,nickname,isAdmin} 或 null */
 let expandState = {};   /* 通用收合狀態: key -> bool(展開) */
@@ -359,11 +360,38 @@ function stripUndefinedDeep(val){
 }
 
 let _suppressNextDataEcho=false, _suppressNextUsersEcho=false;
-function pushData(){
+
+/* ============================================================
+   資料寫入：一律「每筆各自獨立存取」，絕不整包覆蓋整個清單。
+   這是解決多人同時操作時互相覆蓋彼此異動的關鍵——
+   Firebase 對「各自獨立路徑」的寫入本身就有保護，不會互相干擾。
+   ============================================================ */
+function _writeDataPath(relPath, value){
   _suppressNextDataEcho=true;
-  const payload = stripUndefinedDeep({ PROJECTS, TASKS, GENERAL, DELIV_STATUS, HISTORY, nextId });
-  _dataRef.set(payload).catch(e=>toast("儲存失敗，請檢查網路"));
+  const p = (value===null) ? _dataRef.child(relPath).remove() : _dataRef.child(relPath).set(stripUndefinedDeep(value));
+  p.catch(e=>toast("儲存失敗，請檢查網路"));
 }
+function newDataId(bucket){
+  /* 用 Firebase 自帶的 push() 產生全域唯一的 id，取代原本容易在多人同時操作時
+     算出同一個編號的手動計數器(nextId)，徹底避免「兩人同時新增，拿到同一個id」的碰撞 */
+  return _dataRef.child(bucket).push().key;
+}
+function writeTask(t){ _writeDataPath("TASKS/"+t.id, t); }
+function removeTaskRecord(id){ _writeDataPath("TASKS/"+id, null); }
+function writeGeneral(t){ _writeDataPath("GENERAL/"+t.id, t); }
+function removeGeneralRecord(id){ _writeDataPath("GENERAL/"+id, null); }
+function writeProjectRecord(p){ _writeDataPath("PROJECTS/"+p.id, p); }
+function removeProjectRecord(id){ _writeDataPath("PROJECTS/"+id, null); }
+function writeDelivStatus(key,val){ _writeDataPath("DELIV_STATUS/"+key, val); }
+function addHistoryEntry(scopeId, entry){
+  const key = newDataId("HISTORY/"+scopeId);
+  entry = Object.assign({_key:key}, entry);
+  HISTORY[scopeId] = HISTORY[scopeId] || [];
+  HISTORY[scopeId].push(entry); /* 本地立即更新，畫面馬上反映，不用等資料庫回應 */
+  _writeDataPath("HISTORY/"+scopeId+"/"+key, entry);
+}
+function removeHistoryEntry(scopeId, entryKey){ _writeDataPath("HISTORY/"+scopeId+"/"+entryKey, null); }
+
 /* 使用者名單：每次只寫入「單一一筆」使用者的子節點，絕不整包覆蓋整份名單。
    這是配合安全規則的必要做法——規則是「每個人只能寫自己那一筆」，
    若整包覆蓋會同時觸碰到別人的資料，導致整個寫入被規則擋下。
@@ -373,8 +401,6 @@ function pushUserRecord(uid, dataOrNull){
   const p = (dataOrNull===null) ? _usersRef.child(uid).remove() : _usersRef.child(uid).set(stripUndefinedDeep(dataOrNull));
   p.catch(e=>toast("儲存失敗，請檢查網路"));
 }
-/* 舊名保留相容：任何呼叫 _push() 的地方，一律視為資料異動 */
-function _push(){ pushData(); }
 
 let dataReady=false, usersReady=false, usersListenerAttached=false, dataListenerAttached=false;
 function _maybeReady(){
@@ -431,12 +457,19 @@ function ensureDataListener(){
   _dataRef.on("value", snap=>{
     const d=snap.val();
     if(d){
-      if(d.PROJECTS) PROJECTS=d.PROJECTS;
-      if(d.TASKS) TASKS=d.TASKS;
-      if(d.GENERAL) GENERAL=d.GENERAL;
+      /* Object.keys(...).map(...) 對「舊格式的陣列」跟「新格式的各自獨立子節點」
+         都適用，兩種資料可以平順接軌，不需要手動搬移既有資料 */
+      if(d.PROJECTS) PROJECTS = Object.keys(d.PROJECTS).map(k=>d.PROJECTS[k]);
+      if(d.TASKS)    TASKS    = Object.keys(d.TASKS).map(k=>d.TASKS[k]);
+      if(d.GENERAL)  GENERAL  = Object.keys(d.GENERAL).map(k=>d.GENERAL[k]);
       if(d.DELIV_STATUS) DELIV_STATUS=d.DELIV_STATUS;
-      if(d.HISTORY) HISTORY=d.HISTORY;
-      if(d.nextId) nextId=d.nextId;
+      if(d.HISTORY){
+        HISTORY = {};
+        Object.keys(d.HISTORY).forEach(scopeId=>{
+          const raw = d.HISTORY[scopeId];
+          HISTORY[scopeId] = Object.keys(raw).map(k=>Object.assign({_key:k}, raw[k]));
+        });
+      }
     }
     dataReady=true;
     if(_suppressNextDataEcho){ _suppressNextDataEcho=false; return; }
@@ -543,13 +576,16 @@ function confirmAddTask(key){
   const taskText=(d.task||"").trim();
   if(!taskText){ toast("請輸入作業內容"); return; }
   if(d.kind==="general"){
-    const seq=GENERAL.length? Math.max(...GENERAL.map(g=>g.seq))+1 : 1;
-    GENERAL.push({id:nextId++,seq,task:taskText,due:d.due||todayDueDefault(),persons:d.persons||[],report:"",status:"待執行",delayLocked:false});
+    const t={id:newDataId("GENERAL"),task:taskText,due:d.due||todayDueDefault(),persons:d.persons||[],report:"",status:"待執行",delayLocked:false};
+    GENERAL.push(t);
+    writeGeneral(t);
   } else {
-    TASKS.push({id:nextId++,proj:d.proj,wi:d.wi,task:taskText,due:d.due||todayDueDefault(),persons:d.persons||[],report:"",status:"待執行",delayLocked:false});
+    const t={id:newDataId("TASKS"),proj:d.proj,wi:d.wi,task:taskText,due:d.due||todayDueDefault(),persons:d.persons||[],report:"",status:"待執行",delayLocked:false};
+    TASKS.push(t);
+    writeTask(t);
   }
   delete DRAFTS[key];
-  _push(); renderApp();
+  renderApp();
 }
 function draftRowHtml(key){
   const d=DRAFTS[key];
@@ -617,7 +653,7 @@ function statusCellHtml(t,kind,projId){
   if(!currentUser || !currentUser.isAdmin){
     return `<span class="badge ${badgeCls} no-print">${t.status}</span>`;
   }
-  return `<select class="status-select no-print" onchange="adminChangeStatus('${kind}','${projId||""}',${t.id},this.value)">
+  return `<select class="status-select no-print" onchange="adminChangeStatus('${kind}','${projId||""}','${t.id}',this.value)">
     <option value="待執行" ${t.status==="待執行"?"selected":""}>待執行</option>
     <option value="執行中" ${t.status==="執行中"?"selected":""}>執行中</option>
     <option value="延誤" ${t.status==="延誤"?"selected":""}>延誤</option>
@@ -640,29 +676,29 @@ function adminChangeStatus(kind,projId,id,newStatus){
   }
 }
 
-function taskRowHtml(t, kind, projId, wiId){
+function taskRowHtml(t, kind, projId, displayNo){
   const personsHtml = (t.persons||[]).map((p,i)=>
-    `<span class="ptag">${esc(p)}<span class="x" onclick="removePerson('${kind}',${t.id},${i})">×</span></span>`
+    `<span class="ptag">${esc(p)}<span class="x" onclick="removePerson('${kind}','${t.id}',${i})">×</span></span>`
   ).join("");
   return `<div class="t-row" data-id="${t.id}">
-    ${kind==="general"?`<div class="t-cell c-seq">${t.seq}</div>`:""}
+    ${kind==="general"?`<div class="t-cell c-seq">${displayNo}</div>`:""}
     <div class="t-cell c-task">
       ${taskContentHtml(t.task)}
     </div>
     <div class="t-cell c-due">
-      <input type="date" class="due-input no-print" min="${todayISO()}" value="${dueToISO(t.due)}" onchange="updateExistingDue('${kind}',${t.id},this.value)">
+      <input type="date" class="due-input no-print" min="${todayISO()}" value="${dueToISO(t.due)}" onchange="updateExistingDue('${kind}','${t.id}',this.value)">
       <span class="print-only-text">${esc(t.due)||"—"}</span>
     </div>
     <div class="t-cell c-person">
       ${personsHtml}
-      <button class="p-add" onclick="openPersonPicker(event,'${kind}',${t.id})">＋</button>
+      <button class="p-add" onclick="openPersonPicker(event,'${kind}','${t.id}')">＋</button>
     </div>
     <div class="t-cell c-status">${statusCellHtml(t,kind,projId)}<span class="print-only-text">${esc(t.status)}</span></div>
     <div class="t-cell c-report">
       <div class="rtext" contenteditable="true" spellcheck="false" data-field="report">${esc(t.report)}</div>
-      <button class="upd-btn" onclick="clearReport('${kind}',${t.id})">更新</button>
+      <button class="upd-btn" onclick="clearReport('${kind}','${t.id}')">更新</button>
     </div>
-    <div class="t-cell c-act"><button class="del-btn" onclick="deleteTask('${kind}',${t.id})">✕</button></div>
+    <div class="t-cell c-act"><button class="del-btn" onclick="deleteTask('${kind}','${t.id}')">✕</button></div>
   </div>`;
 }
 
@@ -684,7 +720,7 @@ function renderGeneralSection(){
   const closed = hasActiveFilters()
     ? list.length===0 /* 有篩選時：有符合的任務就展開，否則收合 */
     : isClosed(key, true); /* 沒有篩選時：預設收合，即使已有工作也不自動展開 */
-  const rows = list.map(t=>taskRowHtml(t,'general','')).join("");
+  const rows = list.map((t,i)=>taskRowHtml(t,'general','',i+1)).join("");
 
   const draftKey=draftKeyFor('general');
   const draftRow = DRAFTS[draftKey] ? draftRowHtml(draftKey) : "";
@@ -854,9 +890,11 @@ function confirmAddProject(){
   const val=document.getElementById("new-proj-name").value.trim();
   if(!val){ toast("請輸入專案名稱"); return; }
   if(PROJECTS.some(p=>p.name===val)){ toast("已有相同名稱的專案"); return; }
-  const id="P"+(nextId++);
-  PROJECTS.push({id,name:val,color:nextProjectColor()});
-  _push(); closeModal(); renderApp();
+  const id=newDataId("PROJECTS");
+  const proj={id,name:val,color:nextProjectColor()};
+  PROJECTS.push(proj);
+  writeProjectRecord(proj);
+  closeModal(); renderApp();
   toast(`專案「${val}」已新增`);
 }
 function deleteProject(projId){
@@ -864,11 +902,19 @@ function deleteProject(projId){
   const proj=PROJECTS.find(p=>p.id===projId);
   if(!proj) return;
   if(!confirm(`確定要刪除「${proj.name}」專案嗎？這會同時刪除其下所有任務與歷程紀錄，且無法復原。`)) return;
+  const tasksToRemove = TASKS.filter(t=>t.proj===projId);
   PROJECTS=PROJECTS.filter(p=>p.id!==projId);
   TASKS=TASKS.filter(t=>t.proj!==projId);
-  Object.keys(DELIV_STATUS).forEach(k=>{ if(k.startsWith(projId+"__")) delete DELIV_STATUS[k]; });
+  const delivKeysToRemove = Object.keys(DELIV_STATUS).filter(k=>k.startsWith(projId+"__"));
+  delivKeysToRemove.forEach(k=>delete DELIV_STATUS[k]);
   delete HISTORY[projId];
-  _push(); renderApp();
+
+  removeProjectRecord(projId);
+  tasksToRemove.forEach(t=>removeTaskRecord(t.id));
+  delivKeysToRemove.forEach(k=>writeDelivStatus(k,null));
+  _writeDataPath("HISTORY/"+projId, null);
+
+  renderApp();
   toast(`已刪除「${proj.name}」專案`);
 }
 
@@ -884,7 +930,7 @@ function openHistory(scopeId){
     <td>${esc(e.completedDate)}</td>
     <td>${esc((e.persons||[]).join("、"))}</td>
     <td>${esc(e.report||"—")}</td>
-    ${isAdmin?`<td><button onclick="unarchiveHistoryEntry('${scopeId}',${idx})">取消歸檔</button></td>`:""}
+    ${isAdmin?`<td><button onclick="unarchiveHistoryEntry('${scopeId}','${e._key||idx}')">取消歸檔</button></td>`:""}
   </tr>`).join("");
   const title = scopeId==="__general" ? "一般事務工作 歷程" : ((PROJECTS.find(p=>p.id===scopeId)||{}).name||scopeId)+" 歷程";
   showModal(`
@@ -899,25 +945,28 @@ function openHistory(scopeId){
 
 /* 取消歸檔：把歷程裡的紀錄復原回原本的作業清單，重新變成可編輯、可追蹤的任務
    （僅管理員可操作，跟「標記完成」的權限對稱）*/
-function unarchiveHistoryEntry(scopeId, idx){
+function unarchiveHistoryEntry(scopeId, entryKey){
   if(!currentUser||!currentUser.isAdmin) return;
   const list = HISTORY[scopeId];
-  if(!list || !list[idx]) return;
+  if(!list) return;
+  const idx = list.findIndex(e=>String(e._key)===String(entryKey));
+  if(idx<0) return;
   const e = list[idx];
   if(!confirm(`確定要將「${e.task}」從歷程復原回作業清單嗎？`)) return;
 
   if(scopeId==="__general"){
-    const seq = GENERAL.length ? Math.max(...GENERAL.map(g=>g.seq))+1 : 1;
-    const t = {id:nextId++, seq, task:e.task, due:todayDueDefault(), persons:e.persons||[], report:e.report||"", status:"待執行", delayLocked:false};
+    const t = {id:newDataId("GENERAL"), task:e.task, due:todayDueDefault(), persons:e.persons||[], report:e.report||"", status:"待執行", delayLocked:false};
     recomputeOne(t);
     GENERAL.push(t);
+    writeGeneral(t);
   } else {
-    const t = {id:nextId++, proj:scopeId, wi:e.wi||"", task:e.task, due:todayDueDefault(), persons:e.persons||[], report:e.report||"", status:"待執行", delayLocked:false};
+    const t = {id:newDataId("TASKS"), proj:scopeId, wi:e.wi||"", task:e.task, due:todayDueDefault(), persons:e.persons||[], report:e.report||"", status:"待執行", delayLocked:false};
     recomputeOne(t);
     TASKS.push(t);
+    writeTask(t);
   }
   list.splice(idx,1);
-  _push();
+  removeHistoryEntry(scopeId, entryKey);
   openHistory(scopeId); /* 重新整理彈出視窗內容 */
   renderApp();
   toast("已取消歸檔，任務已復原");
@@ -971,7 +1020,7 @@ function removeUser(k){
 function openPersonPicker(evt,kind,taskId){
   evt.stopPropagation();
   const names = approvedNicknames();
-  const list = TASKS.concat(GENERAL).find(t=>t.id===taskId);
+  const list = TASKS.concat(GENERAL).find(t=>String(t.id)===String(taskId));
   const already = list ? (list.persons||[]) : [];
   const options = names.filter(n=>!already.includes(n));
   let box=document.getElementById("person-pop");
@@ -979,7 +1028,7 @@ function openPersonPicker(evt,kind,taskId){
   box=document.createElement("div");
   box.id="person-pop";
   box.style.cssText="position:absolute;background:var(--sur);border:1px solid var(--bd2);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.15);z-index:200;min-width:120px;max-height:200px;overflow:auto";
-  box.innerHTML = options.length ? options.map(n=>`<div style="padding:6px 12px;font-size:12px;cursor:pointer" onmouseover="this.style.background='var(--sur1)'" onmouseout="this.style.background=''" onclick="addPerson('${kind}',${taskId},'${n.replace(/'/g,"\\'")}')">${esc(n)}</div>`).join("")
+  box.innerHTML = options.length ? options.map(n=>`<div style="padding:6px 12px;font-size:12px;cursor:pointer" onmouseover="this.style.background='var(--sur1)'" onmouseout="this.style.background=''" onclick="addPerson('${kind}','${taskId}','${n.replace(/'/g,"\\'")}')">${esc(n)}</div>`).join("")
     : `<div style="padding:6px 12px;font-size:12px;color:var(--tx3)">沒有可加入的人</div>`;
   document.body.appendChild(box);
   const r=evt.target.getBoundingClientRect();
@@ -989,13 +1038,13 @@ function openPersonPicker(evt,kind,taskId){
 }
 function findTaskList(kind){ return kind==="general" ? GENERAL : TASKS; }
 function addPerson(kind,taskId,name){
-  const t=findTaskList(kind).find(x=>x.id===taskId);
-  if(t){ t.persons=t.persons||[]; if(!t.persons.includes(name)) t.persons.push(name); _push(); renderApp(); }
+  const t=findTaskList(kind).find(x=>String(x.id)===String(taskId));
+  if(t){ t.persons=t.persons||[]; if(!t.persons.includes(name)) t.persons.push(name); if(kind==='general') writeGeneral(t); else writeTask(t); renderApp(); }
   const box=document.getElementById("person-pop"); if(box) box.remove();
 }
 function removePerson(kind,taskId,idx){
-  const t=findTaskList(kind).find(x=>x.id===taskId);
-  if(t && t.persons){ t.persons.splice(idx,1); _push(); renderApp(); }
+  const t=findTaskList(kind).find(x=>String(x.id)===String(taskId));
+  if(t && t.persons){ t.persons.splice(idx,1); if(kind==='general') writeGeneral(t); else writeTask(t); renderApp(); }
 }
 
 /* ============================================================
@@ -1003,50 +1052,53 @@ function removePerson(kind,taskId,idx){
    ============================================================ */
 function deleteTask(kind,id){
   if(!confirm("確定要刪除這筆任務？")) return;
-  if(kind==="general"){ GENERAL=GENERAL.filter(t=>t.id!==id); } else { TASKS=TASKS.filter(t=>t.id!==id); }
-  _push(); renderApp();
+  if(kind==="general"){ GENERAL=GENERAL.filter(t=>String(t.id)!==String(id)); removeGeneralRecord(id); }
+  else { TASKS=TASKS.filter(t=>String(t.id)!==String(id)); removeTaskRecord(id); }
+  renderApp();
 }
 function clearReport(kind,id){
-  const t=findTaskList(kind).find(x=>x.id===id);
-  if(t){ t.report=""; _push(); renderApp(); }
+  const t=findTaskList(kind).find(x=>String(x.id)===String(id));
+  if(t){ t.report=""; if(kind==="general") writeGeneral(t); else writeTask(t); renderApp(); }
 }
 function updateExistingDue(kind,id,isoVal){
-  const t=findTaskList(kind).find(x=>x.id===id);
+  const t=findTaskList(kind).find(x=>String(x.id)===String(id));
   if(!t) return;
   t.due = clampDueNotPast(isoVal);
   recomputeOne(t); /* 截止日期變動可能影響延誤判斷，立即重新計算 */
-  _push();
+  if(kind==="general") writeGeneral(t); else writeTask(t);
   renderApp();
 }
 function adminSetStatus(kind,id,newStatus){
   if(!currentUser||!currentUser.isAdmin) return;
-  const t=findTaskList(kind).find(x=>x.id===id);
-  if(t){ t.status=newStatus; t.delayLocked=(newStatus==="延誤"); _push(); renderApp(); }
+  const t=findTaskList(kind).find(x=>String(x.id)===String(id));
+  if(t){ t.status=newStatus; t.delayLocked=(newStatus==="延誤"); if(kind==="general") writeGeneral(t); else writeTask(t); renderApp(); }
 }
 function adminComplete(kind,proj,id){
   if(!currentUser||!currentUser.isAdmin) return;
   if(kind==="general"){
-    const idx=GENERAL.findIndex(t=>t.id===id); if(idx<0) return;
+    const idx=GENERAL.findIndex(t=>String(t.id)===String(id)); if(idx<0) return;
     const t=GENERAL[idx];
-    HISTORY["__general"]=HISTORY["__general"]||[];
-    HISTORY["__general"].push({wiLabel:"",wi:"",task:t.task,due:t.due||"",completedDate:todayStr(),persons:t.persons||[],report:t.report||""});
+    addHistoryEntry("__general", {wiLabel:"",wi:"",task:t.task,due:t.due||"",completedDate:todayStr(),persons:t.persons||[],report:t.report||""});
     GENERAL.splice(idx,1);
+    removeGeneralRecord(t.id);
   } else {
-    const idx=TASKS.findIndex(t=>t.id===id); if(idx<0) return;
+    const idx=TASKS.findIndex(t=>String(t.id)===String(id)); if(idx<0) return;
     const t=TASKS[idx];
     const w=workitemById(t.wi);
-    HISTORY[t.proj]=HISTORY[t.proj]||[];
-    HISTORY[t.proj].push({wiLabel:w?w.label:"",wi:t.wi||"",task:t.task,due:t.due||"",completedDate:todayStr(),persons:t.persons||[],report:t.report||""});
+    addHistoryEntry(t.proj, {wiLabel:w?w.label:"",wi:t.wi||"",task:t.task,due:t.due||"",completedDate:todayStr(),persons:t.persons||[],report:t.report||""});
     TASKS.splice(idx,1);
+    removeTaskRecord(t.id);
   }
-  _push(); renderApp(); toast("已歸檔至歷程");
+  renderApp(); toast("已歸檔至歷程");
 }
 function cycleDeliv(proj,wi,deliv){
   if(!currentUser||currentUser.pending||currentUser.needsNickname) return;
   const key=proj+"__"+wi+"__"+deliv;
   const cur=DELIV_STATUS[key]||"待辦";
   const next = cur==="待辦"?"進行中":cur==="進行中"?"完成":"待辦";
-  DELIV_STATUS[key]=next; _push(); renderApp();
+  DELIV_STATUS[key]=next;
+  writeDelivStatus(key,next);
+  renderApp();
 }
 
 /* 欄位即時編輯儲存 (contenteditable blur) */
@@ -1056,10 +1108,11 @@ document.addEventListener("blur", function(e){
   const field=el.dataset && el.dataset.field;
   if(!field) return;
   const row=el.closest("[data-id]"); if(!row) return;
-  const id=parseInt(row.dataset.id);
-  let list = TASKS.find(x=>x.id===id) ? TASKS : (GENERAL.find(x=>x.id===id)?GENERAL:null);
+  const id=row.dataset.id; /* id 一律當字串處理，相容舊資料(數字)與新資料(push key字串) */
+  const inTasks = TASKS.find(x=>String(x.id)===String(id));
+  const list = inTasks ? TASKS : (GENERAL.find(x=>String(x.id)===String(id)) ? GENERAL : null);
   if(!list) return;
-  const t=list.find(x=>x.id===id);
+  const t=list.find(x=>String(x.id)===String(id));
   if(!t) return;
   const val = el.innerText.trim();
   if(field==="task") t.task=val;
@@ -1067,14 +1120,14 @@ document.addEventListener("blur", function(e){
   else if(field==="report") t.report=val;
   /* 儲存後立即依規則重新判斷該筆任務的執行狀態（延誤一旦鎖定則不受此影響） */
   recomputeOne(t);
-  _push();
+  if(list===GENERAL) writeGeneral(t); else writeTask(t);
   /* 延後到下一個事件循環才重繪畫面：
      避免「欄位失焦」跟「點擊同一列的按鈕（更新/刪除）」搶在同一個手勢裡，
      導致畫面在點擊那一瞬間被整個換掉、使按鈕的點擊沒有真正生效 */
   setTimeout(renderApp, 0);
 }, true);
 
-/* 專案名稱編輯：獨立處理，因為專案 id 是字串(如 GX5)，跟任務用的數字 id 不同命名空間 */
+/* 專案名稱編輯：獨立處理，因為專案 id 跟任務 id 不同命名空間 */
 document.addEventListener("blur", function(e){
   const el=e.target;
   if(!(el instanceof HTMLElement)) return;
@@ -1091,7 +1144,7 @@ document.addEventListener("blur", function(e){
   }
   if(val!==proj.name){
     proj.name = val;
-    _push();
+    writeProjectRecord(proj);
     setTimeout(renderApp, 0);
   }
 }, true);
