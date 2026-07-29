@@ -392,12 +392,17 @@ function newDataId(bucket){
      算出同一個編號的手動計數器(nextId)，徹底避免「兩人同時新增，拿到同一個id」的碰撞 */
   return _dataRef.child(bucket).push().key;
 }
-function writeTask(t){ _writeDataPath("TASKS/"+t.id, t); }
-function removeTaskRecord(id){ _writeDataPath("TASKS/"+id, null); }
-function writeGeneral(t){ _writeDataPath("GENERAL/"+t.id, t); }
-function removeGeneralRecord(id){ _writeDataPath("GENERAL/"+id, null); }
-function writeProjectRecord(p){ _writeDataPath("PROJECTS/"+p.id, p); }
-function removeProjectRecord(id){ _writeDataPath("PROJECTS/"+id, null); }
+function _stripFbKey(obj){
+  const clean = Object.assign({}, obj);
+  delete clean._fbKey;
+  return clean;
+}
+function writeTask(t){ _writeDataPath("TASKS/"+(t._fbKey||t.id), _stripFbKey(t)); }
+function removeTaskRecord(t){ _writeDataPath("TASKS/"+((t&&t._fbKey)||t), null); }
+function writeGeneral(t){ _writeDataPath("GENERAL/"+(t._fbKey||t.id), _stripFbKey(t)); }
+function removeGeneralRecord(t){ _writeDataPath("GENERAL/"+((t&&t._fbKey)||t), null); }
+function writeProjectRecord(p){ _writeDataPath("PROJECTS/"+(p._fbKey||p.id), _stripFbKey(p)); }
+function removeProjectRecord(p){ _writeDataPath("PROJECTS/"+((p&&p._fbKey)||p), null); }
 function writeDelivStatus(key,val){ _writeDataPath("DELIV_STATUS/"+key, val); }
 function addHistoryEntry(scopeId, entry){
   const key = newDataId("HISTORY/"+scopeId);
@@ -478,10 +483,13 @@ function ensureDataListener(){
     let changed=false;
     if(d){
       /* Object.keys(...).map(...) 對「舊格式的陣列」跟「新格式的各自獨立子節點」
-         都適用，兩種資料可以平順接軌，不需要手動搬移既有資料 */
-      const newProjects = d.PROJECTS ? Object.keys(d.PROJECTS).map(k=>d.PROJECTS[k]) : PROJECTS;
-      const newTasks    = d.TASKS    ? Object.keys(d.TASKS).map(k=>d.TASKS[k])       : TASKS;
-      const newGeneral  = d.GENERAL  ? Object.keys(d.GENERAL).map(k=>d.GENERAL[k])   : GENERAL;
+         都適用，兩種資料可以平順接軌，不需要手動搬移既有資料。
+         同時記下每一筆資料「真正存放的位置」(_fbKey)——
+         舊格式陣列資料存放的位置是「清單中的第幾個」，不等於資料自己記錄的編號(id)，
+         之後任何更新/刪除都必須依照 _fbKey 這個真實位置操作，才不會寫到錯誤/不存在的位置。 */
+      const newProjects = d.PROJECTS ? Object.keys(d.PROJECTS).map(k=>Object.assign({},d.PROJECTS[k],{_fbKey:k})) : PROJECTS;
+      const newTasks    = d.TASKS    ? Object.keys(d.TASKS).map(k=>Object.assign({},d.TASKS[k],{_fbKey:k}))       : TASKS;
+      const newGeneral  = d.GENERAL  ? Object.keys(d.GENERAL).map(k=>Object.assign({},d.GENERAL[k],{_fbKey:k}))   : GENERAL;
       const newDeliv    = d.DELIV_STATUS || DELIV_STATUS;
       let newHistory = HISTORY;
       if(d.HISTORY){
@@ -936,8 +944,8 @@ function deleteProject(projId){
   delivKeysToRemove.forEach(k=>delete DELIV_STATUS[k]);
   delete HISTORY[projId];
 
-  removeProjectRecord(projId);
-  tasksToRemove.forEach(t=>removeTaskRecord(t.id));
+  removeProjectRecord(proj);
+  tasksToRemove.forEach(t=>removeTaskRecord(t));
   delivKeysToRemove.forEach(k=>writeDelivStatus(k,null));
   _writeDataPath("HISTORY/"+projId, null);
 
@@ -1079,8 +1087,15 @@ function removePerson(kind,taskId,idx){
    ============================================================ */
 function deleteTask(kind,id){
   if(!confirm("確定要刪除這筆任務？")) return;
-  if(kind==="general"){ GENERAL=GENERAL.filter(t=>String(t.id)!==String(id)); removeGeneralRecord(id); }
-  else { TASKS=TASKS.filter(t=>String(t.id)!==String(id)); removeTaskRecord(id); }
+  if(kind==="general"){
+    const t=GENERAL.find(x=>String(x.id)===String(id));
+    GENERAL=GENERAL.filter(x=>String(x.id)!==String(id));
+    if(t) removeGeneralRecord(t);
+  } else {
+    const t=TASKS.find(x=>String(x.id)===String(id));
+    TASKS=TASKS.filter(x=>String(x.id)!==String(id));
+    if(t) removeTaskRecord(t);
+  }
   renderApp();
 }
 function clearReport(kind,id){
@@ -1107,14 +1122,14 @@ function adminComplete(kind,proj,id){
     const t=GENERAL[idx];
     addHistoryEntry("__general", {wiLabel:"",wi:"",task:t.task,due:t.due||"",completedDate:todayStr(),persons:t.persons||[],report:t.report||""});
     GENERAL.splice(idx,1);
-    removeGeneralRecord(t.id);
+    removeGeneralRecord(t);
   } else {
     const idx=TASKS.findIndex(t=>String(t.id)===String(id)); if(idx<0) return;
     const t=TASKS[idx];
     const w=workitemById(t.wi);
     addHistoryEntry(t.proj, {wiLabel:w?w.label:"",wi:t.wi||"",task:t.task,due:t.due||"",completedDate:todayStr(),persons:t.persons||[],report:t.report||""});
     TASKS.splice(idx,1);
-    removeTaskRecord(t.id);
+    removeTaskRecord(t);
   }
   renderApp(); toast("已歸檔至歷程");
 }
