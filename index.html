@@ -359,7 +359,24 @@ function stripUndefinedDeep(val){
   return val;
 }
 
-let _suppressNextDataEcho=false, _suppressNextUsersEcho=false;
+/* 用「內容是否真的不同」來判斷要不要重繪，取代原本容易誤判的計時性旗標。
+   這樣才能正確分辨：這次收到的更新，是我自己剛寫入的回音（內容跟目前畫面一致，不用重繪），
+   還是別人剛做的變動（內容跟目前畫面不同，一定要重繪），不會再把別人的更新誤判成自己的回音。 */
+function deepEqual(a,b){
+  if(a===b) return true;
+  if(a==null || b==null) return a===b;
+  if(typeof a!=="object" || typeof b!=="object") return a===b;
+  if(Array.isArray(a) !== Array.isArray(b)) return false;
+  if(Array.isArray(a)){
+    if(a.length!==b.length) return false;
+    for(let i=0;i<a.length;i++){ if(!deepEqual(a[i],b[i])) return false; }
+    return true;
+  }
+  const ka=Object.keys(a), kb=Object.keys(b);
+  if(ka.length!==kb.length) return false;
+  for(const k of ka){ if(!Object.prototype.hasOwnProperty.call(b,k) || !deepEqual(a[k],b[k])) return false; }
+  return true;
+}
 
 /* ============================================================
    資料寫入：一律「每筆各自獨立存取」，絕不整包覆蓋整個清單。
@@ -367,7 +384,6 @@ let _suppressNextDataEcho=false, _suppressNextUsersEcho=false;
    Firebase 對「各自獨立路徑」的寫入本身就有保護，不會互相干擾。
    ============================================================ */
 function _writeDataPath(relPath, value){
-  _suppressNextDataEcho=true;
   const p = (value===null) ? _dataRef.child(relPath).remove() : _dataRef.child(relPath).set(stripUndefinedDeep(value));
   p.catch(e=>toast("儲存失敗，請檢查網路"));
 }
@@ -397,12 +413,12 @@ function removeHistoryEntry(scopeId, entryKey){ _writeDataPath("HISTORY/"+scopeI
    若整包覆蓋會同時觸碰到別人的資料，導致整個寫入被規則擋下。
    dataOrNull 傳 null 代表要移除這筆使用者資料。 */
 function pushUserRecord(uid, dataOrNull){
-  _suppressNextUsersEcho=true;
   const p = (dataOrNull===null) ? _usersRef.child(uid).remove() : _usersRef.child(uid).set(stripUndefinedDeep(dataOrNull));
   p.catch(e=>toast("儲存失敗，請檢查網路"));
 }
 
 let dataReady=false, usersReady=false, usersListenerAttached=false, dataListenerAttached=false;
+let _dataHadFirstLoad=false, _usersHadFirstLoad=false;
 function _maybeReady(){
   /* 待審核/未設定暱稱的使用者不需要任務資料就能顯示畫面，
      只有「管理員」或「已核准」的人才需要等 data 讀取完成 */
@@ -440,10 +456,13 @@ function ensureUsersListener(){
   if(usersListenerAttached) return;
   usersListenerAttached=true;
   _usersRef.on("value", snap=>{
-    USERS = snap.val() || {};
+    const newUsers = snap.val() || {};
+    const changed = !deepEqual(newUsers, USERS);
+    USERS = newUsers;
     usersReady=true;
     recomputeCurrentUser(); /* 名單更新時重新判斷身份，避免競速卡住 */
-    if(_suppressNextUsersEcho){ _suppressNextUsersEcho=false; return; }
+    if(!changed && _usersHadFirstLoad){ return; } /* 內容跟目前畫面完全一樣，通常是自己剛寫入的回音，不用重繪 */
+    _usersHadFirstLoad=true;
     _maybeReady();
   }, err=>{
     usersReady=true; /* 讀取被拒絕(例如尚未登入)也視為完成一次，避免卡住 */
@@ -456,23 +475,31 @@ function ensureDataListener(){
   dataListenerAttached=true;
   _dataRef.on("value", snap=>{
     const d=snap.val();
+    let changed=false;
     if(d){
       /* Object.keys(...).map(...) 對「舊格式的陣列」跟「新格式的各自獨立子節點」
          都適用，兩種資料可以平順接軌，不需要手動搬移既有資料 */
-      if(d.PROJECTS) PROJECTS = Object.keys(d.PROJECTS).map(k=>d.PROJECTS[k]);
-      if(d.TASKS)    TASKS    = Object.keys(d.TASKS).map(k=>d.TASKS[k]);
-      if(d.GENERAL)  GENERAL  = Object.keys(d.GENERAL).map(k=>d.GENERAL[k]);
-      if(d.DELIV_STATUS) DELIV_STATUS=d.DELIV_STATUS;
+      const newProjects = d.PROJECTS ? Object.keys(d.PROJECTS).map(k=>d.PROJECTS[k]) : PROJECTS;
+      const newTasks    = d.TASKS    ? Object.keys(d.TASKS).map(k=>d.TASKS[k])       : TASKS;
+      const newGeneral  = d.GENERAL  ? Object.keys(d.GENERAL).map(k=>d.GENERAL[k])   : GENERAL;
+      const newDeliv    = d.DELIV_STATUS || DELIV_STATUS;
+      let newHistory = HISTORY;
       if(d.HISTORY){
-        HISTORY = {};
+        newHistory = {};
         Object.keys(d.HISTORY).forEach(scopeId=>{
           const raw = d.HISTORY[scopeId];
-          HISTORY[scopeId] = Object.keys(raw).map(k=>Object.assign({_key:k}, raw[k]));
+          newHistory[scopeId] = Object.keys(raw).map(k=>Object.assign({_key:k}, raw[k]));
         });
       }
+      if(!deepEqual(newProjects,PROJECTS)){ PROJECTS=newProjects; changed=true; }
+      if(!deepEqual(newTasks,TASKS)){ TASKS=newTasks; changed=true; }
+      if(!deepEqual(newGeneral,GENERAL)){ GENERAL=newGeneral; changed=true; }
+      if(!deepEqual(newDeliv,DELIV_STATUS)){ DELIV_STATUS=newDeliv; changed=true; }
+      if(!deepEqual(newHistory,HISTORY)){ HISTORY=newHistory; changed=true; }
     }
     dataReady=true;
-    if(_suppressNextDataEcho){ _suppressNextDataEcho=false; return; }
+    if(!changed && _dataHadFirstLoad){ return; } /* 內容跟目前畫面完全一樣，通常是自己剛寫入的回音，不用重繪 */
+    _dataHadFirstLoad=true;
     _maybeReady();
   }, err=>{
     dataReady=true;
