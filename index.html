@@ -404,6 +404,40 @@ function removeGeneralRecord(t){ _writeDataPath("GENERAL/"+((t&&t._fbKey)||t), n
 function writeProjectRecord(p){ _writeDataPath("PROJECTS/"+(p._fbKey||p.id), _stripFbKey(p)); }
 function removeProjectRecord(p){ _writeDataPath("PROJECTS/"+((p&&p._fbKey)||p), null); }
 function writeDelivStatus(key,val){ _writeDataPath("DELIV_STATUS/"+key, val); }
+
+/* 「修改既有資料」專用的防呆寫入：寫入前先跟資料庫確認這筆資料是否還存在。
+   情境：工程師畫面還沒收到別人剛做的刪除/歸檔通知(網路上本來就會有些微時間差)，
+   如果工程師這時候去修改這筆「其實已經被刪除」的舊資料，若照舊直接覆蓋寫入，
+   等於會把已經被刪除的資料重新救回來。改成先確認還存在才真正寫入，避免這種情況。 */
+function _writeExisting(relPath, value, onGone){
+  const ref = _dataRef.child(relPath);
+  ref.once("value").then(function(snap){
+    if(snap.val()===null){
+      toast("這筆任務可能已被刪除或歸檔，您的異動未儲存");
+      if(onGone) onGone();
+      return;
+    }
+    return ref.set(stripUndefinedDeep(value));
+  }).catch(e=>toast("儲存失敗，請檢查網路"));
+}
+function writeExistingTask(t){
+  _writeExisting("TASKS/"+(t._fbKey||t.id), _stripFbKey(t), function(){
+    TASKS = TASKS.filter(x=>String(x.id)!==String(t.id)); /* 清掉本地殘留的舊資料，畫面立即反映真實狀態 */
+    renderApp();
+  });
+}
+function writeExistingGeneral(t){
+  _writeExisting("GENERAL/"+(t._fbKey||t.id), _stripFbKey(t), function(){
+    GENERAL = GENERAL.filter(x=>String(x.id)!==String(t.id));
+    renderApp();
+  });
+}
+function writeExistingProject(p){
+  _writeExisting("PROJECTS/"+(p._fbKey||p.id), _stripFbKey(p), function(){
+    PROJECTS = PROJECTS.filter(x=>x.id!==p.id);
+    renderApp();
+  });
+}
 function addHistoryEntry(scopeId, entry){
   const key = newDataId("HISTORY/"+scopeId);
   entry = Object.assign({_key:key}, entry);
@@ -1074,12 +1108,12 @@ function openPersonPicker(evt,kind,taskId){
 function findTaskList(kind){ return kind==="general" ? GENERAL : TASKS; }
 function addPerson(kind,taskId,name){
   const t=findTaskList(kind).find(x=>String(x.id)===String(taskId));
-  if(t){ t.persons=t.persons||[]; if(!t.persons.includes(name)) t.persons.push(name); if(kind==='general') writeGeneral(t); else writeTask(t); renderApp(); }
+  if(t){ t.persons=t.persons||[]; if(!t.persons.includes(name)) t.persons.push(name); if(kind==='general') writeExistingGeneral(t); else writeExistingTask(t); renderApp(); }
   const box=document.getElementById("person-pop"); if(box) box.remove();
 }
 function removePerson(kind,taskId,idx){
   const t=findTaskList(kind).find(x=>String(x.id)===String(taskId));
-  if(t && t.persons){ t.persons.splice(idx,1); if(kind==='general') writeGeneral(t); else writeTask(t); renderApp(); }
+  if(t && t.persons){ t.persons.splice(idx,1); if(kind==='general') writeExistingGeneral(t); else writeExistingTask(t); renderApp(); }
 }
 
 /* ============================================================
@@ -1100,20 +1134,20 @@ function deleteTask(kind,id){
 }
 function clearReport(kind,id){
   const t=findTaskList(kind).find(x=>String(x.id)===String(id));
-  if(t){ t.report=""; if(kind==="general") writeGeneral(t); else writeTask(t); renderApp(); }
+  if(t){ t.report=""; if(kind==="general") writeExistingGeneral(t); else writeExistingTask(t); renderApp(); }
 }
 function updateExistingDue(kind,id,isoVal){
   const t=findTaskList(kind).find(x=>String(x.id)===String(id));
   if(!t) return;
   t.due = clampDueNotPast(isoVal);
   recomputeOne(t); /* 截止日期變動可能影響延誤判斷，立即重新計算 */
-  if(kind==="general") writeGeneral(t); else writeTask(t);
+  if(kind==="general") writeExistingGeneral(t); else writeExistingTask(t);
   renderApp();
 }
 function adminSetStatus(kind,id,newStatus){
   if(!currentUser||!currentUser.isAdmin) return;
   const t=findTaskList(kind).find(x=>String(x.id)===String(id));
-  if(t){ t.status=newStatus; t.delayLocked=(newStatus==="延誤"); if(kind==="general") writeGeneral(t); else writeTask(t); renderApp(); }
+  if(t){ t.status=newStatus; t.delayLocked=(newStatus==="延誤"); if(kind==="general") writeExistingGeneral(t); else writeExistingTask(t); renderApp(); }
 }
 function adminComplete(kind,proj,id){
   if(!currentUser||!currentUser.isAdmin) return;
@@ -1162,7 +1196,7 @@ document.addEventListener("blur", function(e){
   else if(field==="report") t.report=val;
   /* 儲存後立即依規則重新判斷該筆任務的執行狀態（延誤一旦鎖定則不受此影響） */
   recomputeOne(t);
-  if(list===GENERAL) writeGeneral(t); else writeTask(t);
+  if(list===GENERAL) writeExistingGeneral(t); else writeExistingTask(t);
   /* 延後到下一個事件循環才重繪畫面：
      避免「欄位失焦」跟「點擊同一列的按鈕（更新/刪除）」搶在同一個手勢裡，
      導致畫面在點擊那一瞬間被整個換掉、使按鈕的點擊沒有真正生效 */
@@ -1186,7 +1220,7 @@ document.addEventListener("blur", function(e){
   }
   if(val!==proj.name){
     proj.name = val;
-    writeProjectRecord(proj);
+    writeExistingProject(proj);
     setTimeout(renderApp, 0);
   }
 }, true);
