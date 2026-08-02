@@ -409,12 +409,30 @@ function writeDelivStatus(key,val){ _writeDataPath("DELIV_STATUS/"+key, val); }
    情境：工程師畫面還沒收到別人剛做的刪除/歸檔通知(網路上本來就會有些微時間差)，
    如果工程師這時候去修改這筆「其實已經被刪除」的舊資料，若照舊直接覆蓋寫入，
    等於會把已經被刪除的資料重新救回來。改成先確認還存在才真正寫入，避免這種情況。 */
+/* 純粹「確認這筆資料是否還存在」，不做任何寫入：
+   用於欄位一聚焦(游標點進去)就立刻檢查，不用等使用者打完字、欄位失焦才發現任務其實已經被刪除 */
+function checkStillExists(kind,id){
+  const list = kind==="general" ? GENERAL : TASKS;
+  const t = list.find(x=>String(x.id)===String(id));
+  if(!t) return;
+  const bucket = kind==="general" ? "GENERAL" : "TASKS";
+  const key = t._fbKey||t.id;
+  _dataRef.child(bucket+"/"+key).once("value").then(function(snap){
+    if(snap.val()===null){
+      if(kind==="general"){ GENERAL=GENERAL.filter(x=>String(x.id)!==String(id)); }
+      else { TASKS=TASKS.filter(x=>String(x.id)!==String(id)); }
+      renderApp(); /* 先讓任務從畫面消失 */
+      toast("這筆任務可能已被刪除或歸檔"); /* 再顯示警語 */
+    }
+  }).catch(function(){});
+}
+
 function _writeExisting(relPath, value, onGone){
   const ref = _dataRef.child(relPath);
   ref.once("value").then(function(snap){
     if(snap.val()===null){
-      toast("這筆任務可能已被刪除或歸檔，您的異動未儲存");
-      if(onGone) onGone();
+      if(onGone) onGone(); /* 先讓任務從畫面消失 */
+      toast("這筆任務可能已被刪除或歸檔，您的異動未儲存"); /* 再顯示警語 */
       return;
     }
     return ref.set(stripUndefinedDeep(value));
@@ -605,8 +623,8 @@ function pendingCount(){ return Object.values(USERS).filter(u=>u.status==="pendi
 /* ============================================================
    任務內容渲染（單純一行標題）
    ============================================================ */
-function taskContentHtml(task){
-  return `<div class="ttl" contenteditable="true" spellcheck="false" data-field="task">${esc(task)}</div>`;
+function taskContentHtml(task,kind,id){
+  return `<div class="ttl" contenteditable="true" spellcheck="false" data-field="task" onfocus="checkStillExists('${kind}','${id}')">${esc(task)}</div>`;
 }
 
 /* 欄位標題列（工作項目/執行綱要與結果為區塊本身標題，此處只需列出表格內的欄位） */
@@ -752,7 +770,7 @@ function taskRowHtml(t, kind, projId, displayNo){
   return `<div class="t-row" data-id="${t.id}">
     ${kind==="general"?`<div class="t-cell c-seq">${displayNo}</div>`:""}
     <div class="t-cell c-task">
-      ${taskContentHtml(t.task)}
+      ${taskContentHtml(t.task,kind,t.id)}
     </div>
     <div class="t-cell c-due">
       <input type="date" class="due-input no-print" min="${todayISO()}" value="${dueToISO(t.due)}" onchange="updateExistingDue('${kind}','${t.id}',this.value)">
@@ -1151,21 +1169,36 @@ function adminSetStatus(kind,id,newStatus){
 }
 function adminComplete(kind,proj,id){
   if(!currentUser||!currentUser.isAdmin) return;
-  if(kind==="general"){
-    const idx=GENERAL.findIndex(t=>String(t.id)===String(id)); if(idx<0) return;
-    const t=GENERAL[idx];
-    addHistoryEntry("__general", {wiLabel:"",wi:"",task:t.task,due:t.due||"",completedDate:todayStr(),persons:t.persons||[],report:t.report||""});
-    GENERAL.splice(idx,1);
-    removeGeneralRecord(t);
-  } else {
-    const idx=TASKS.findIndex(t=>String(t.id)===String(id)); if(idx<0) return;
-    const t=TASKS[idx];
-    const w=workitemById(t.wi);
-    addHistoryEntry(t.proj, {wiLabel:w?w.label:"",wi:t.wi||"",task:t.task,due:t.due||"",completedDate:todayStr(),persons:t.persons||[],report:t.report||""});
-    TASKS.splice(idx,1);
-    removeTaskRecord(t);
-  }
-  renderApp(); toast("已歸檔至歷程");
+  const list = kind==="general" ? GENERAL : TASKS;
+  const t = list.find(x=>String(x.id)===String(id));
+  if(!t) return;
+  const bucket = kind==="general" ? "GENERAL" : "TASKS";
+  const key = t._fbKey||t.id;
+  _dataRef.child(bucket+"/"+key).once("value").then(function(snap){
+    if(snap.val()===null){
+      /* 這筆任務其實已經被別人刪除了，放棄歸檔，不要產生指向不存在任務的歷程紀錄 */
+      if(kind==="general"){ GENERAL=GENERAL.filter(x=>String(x.id)!==String(id)); }
+      else { TASKS=TASKS.filter(x=>String(x.id)!==String(id)); }
+      renderApp(); /* 先讓任務從畫面消失 */
+      toast("這筆任務已被刪除，無法歸檔"); /* 再顯示警語 */
+      return;
+    }
+    if(kind==="general"){
+      const idx=GENERAL.findIndex(x=>String(x.id)===String(id)); if(idx<0) return;
+      const tt=GENERAL[idx];
+      addHistoryEntry("__general", {wiLabel:"",wi:"",task:tt.task,due:tt.due||"",completedDate:todayStr(),persons:tt.persons||[],report:tt.report||""});
+      GENERAL.splice(idx,1);
+      removeGeneralRecord(tt);
+    } else {
+      const idx=TASKS.findIndex(x=>String(x.id)===String(id)); if(idx<0) return;
+      const tt=TASKS[idx];
+      const w=workitemById(tt.wi);
+      addHistoryEntry(tt.proj, {wiLabel:w?w.label:"",wi:tt.wi||"",task:tt.task,due:tt.due||"",completedDate:todayStr(),persons:tt.persons||[],report:tt.report||""});
+      TASKS.splice(idx,1);
+      removeTaskRecord(tt);
+    }
+    renderApp(); toast("已歸檔至歷程");
+  }).catch(e=>toast("儲存失敗，請檢查網路"));
 }
 function cycleDeliv(proj,wi,deliv){
   if(!currentUser||currentUser.pending||currentUser.needsNickname) return;
