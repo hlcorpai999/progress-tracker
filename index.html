@@ -817,6 +817,7 @@ function renderGeneralSection(){
     <div class="sec-hd" onclick="toggleKey('${key}',true)">
       <svg class="chev" viewBox="0 0 14 14"><path d="M2 5l5 5 5-5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
       <span class="sec-title">一般事務工作</span>
+      <span class="wi-badge">${GENERAL.length}</span>
       <button class="history-btn danger-outline" onclick="event.stopPropagation();openHistory('__general')">歷程</button>
     </div>
     <div class="sec-body">
@@ -870,9 +871,10 @@ function renderWorkitem(proj,wi){
   const closed = hasActiveFilters()
     ? !workitemHasMatchingTask(proj,wi) /* 有篩選時：符合條件就展開，不符合就收合 */
     : isClosed(key, true); /* 沒有篩選時：維持使用者手動/預設收合邏輯 */
-  const {done,total}=workitemBadge(proj,wi);
+  const {done,total}=workitemBadge(proj,wi); /* 圓點顏色仍依此計算，不受影響 */
   const dotCls = st==="done"?"done":st==="active"?"active":"";
   const badgeCls = st==="done"?"done":st==="active"?"wip":"";
+  const taskCount = TASKS.filter(t=>t.proj===proj && t.wi===wi).length; /* 徽章改顯示任務數量(不受篩選影響) */
 
   const delivHtml = w.delivs.map(d=>{
     const ds=delivStatusOf(proj,wi,d.id);
@@ -893,7 +895,7 @@ function renderWorkitem(proj,wi){
     <div class="wi-hd" onclick="toggleKey('${key}',true)">
       <span class="wi-num">${w.num}</span>
       <span class="wi-label">${esc(w.label)}</span>
-      <span class="wi-badge ${badgeCls}">${done}/${total}</span>
+      <span class="wi-badge ${badgeCls}">${taskCount}</span>
       <svg class="wi-chev" viewBox="0 0 14 14"><path d="M2 5l5 5 5-5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
     </div>
     <div class="wi-body">
@@ -919,12 +921,12 @@ function renderProject(proj){
   const key="proj_"+proj.id;
   const closed = hasActiveFilters()
     ? !projectHasMatchingTask(proj.id)
-    : isClosed(key, true); /* 預設收合，只顯示專案名稱，需點擊才展開工作項目摘要列 */
+    : isClosed(key, false); /* 預設展開，顯示工作項目摘要列；個別工作項目內部表格則預設收合 */
   const delBtn = (currentUser && currentUser.isAdmin)
     ? `<button class="proj-del-btn" onclick="event.stopPropagation();deleteProject('${proj.id}')" title="刪除專案">✕</button>`
     : "";
   return `<div class="proj-row">
-    <div class="proj-hd" onclick="toggleKey('${key}',true)">
+    <div class="proj-hd" onclick="toggleKey('${key}',false)">
       <svg class="wi-chev" viewBox="0 0 14 14" style="transform:rotate(${closed?-90:0}deg)"><path d="M2 5l5 5 5-5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
       <span class="proj-dot" style="background:${projectColor(proj)}"></span>
       <span class="proj-name" contenteditable="true" spellcheck="false" data-proj-rename-id="${proj.id}" onclick="event.stopPropagation()">${esc(proj.name)}</span>
