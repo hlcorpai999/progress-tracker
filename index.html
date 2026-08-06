@@ -313,9 +313,11 @@ function clampDueNotPast(isoVal){
 /* ── 狀態自動判斷 ──
    觸發時機：頁面載入、Firebase 資料同步進來、定時重新檢查(見 periodicStatusCheck)、
    以及使用者編輯截止日期/報告/任務內容欄位時。
-   delayLocked：一旦逾期未回報而被標記「延誤」，即使之後補了報告也不會自動跳回「執行中」，
-   避免看起來像是「補報告就能洗掉遲交紀錄」；但若截止日期被改到未來（不再逾期），
-   則視為管理員主動排除了這筆延誤，應自動解鎖並依當下條件重新判斷。 */
+   規則：只要「逾期」且尚未標記完成，一律視為「延誤」，不論報告欄位有沒有內容。
+   （報告欄位只用來區分「還沒逾期」的情況下該顯示「待執行」還是「執行中」。）
+   delayLocked：一旦被系統判定延誤，就鎖定在延誤，不會因為之後補了報告就自動跳回「執行中」；
+   要解除延誤，必須由管理員把截止日期改到未來（不再逾期）——通常會同時一併把執行狀態
+   改回「執行中」，此時才會依當下條件重新判斷。 */
 function recomputeOne(t){
   if(t.status==="完成") return;
   const hasReport=(t.report||"").trim().length>0;
@@ -324,7 +326,7 @@ function recomputeOne(t){
     if(overdue){ t.status="延誤"; return; } /* 仍然逾期，維持延誤鎖定 */
     t.delayLocked=false; /* 截止日期已改到未來，解鎖後往下重新判斷 */
   }
-  if(!hasReport && overdue){ t.delayLocked=true; t.status="延誤"; }
+  if(overdue){ t.delayLocked=true; t.status="延誤"; }
   else if(hasReport){ t.status="執行中"; }
   else { t.status="待執行"; }
 }
