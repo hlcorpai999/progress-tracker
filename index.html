@@ -501,8 +501,15 @@ function _maybeReady(){
     fbReady=true;
     recomputeAllStatuses(TASKS);
     recomputeAllStatuses(GENERAL);
-    startPeriodicStatusCheck();
   }
+  /* 定時檢查的啟動判斷獨立於上面的 !fbReady 條件之外：
+     原本寫在 if 區塊內，只有「fbReady 從 false 變 true 的那一次」會執行到；
+     但使用者從「登入前畫面」(那個畫面本身就會把 fbReady 設成 true) 一路走到
+     「登入完成、真正需要任務資料」時，fbReady 早就已經是 true 了，
+     導致這段永遠不會被執行、定時檢查形同沒有啟動。
+     改成只要目前身份「需要任務資料」且已經 ready，就確保計時器有啟動；
+     startPeriodicStatusCheck() 內部本身有防重複啟動的判斷，可以放心每次都呼叫。 */
+  if(needsData && fbReady){ startPeriodicStatusCheck(); }
   renderApp();
 }
 
