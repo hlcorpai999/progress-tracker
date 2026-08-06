@@ -310,17 +310,32 @@ function clampDueNotPast(isoVal){
   return isoToDue(isoVal);
 }
 
-/* ── 狀態自動判斷：僅在資料載入(重新整理頁面)時執行一次 ── */
+/* ── 狀態自動判斷 ──
+   觸發時機：頁面載入、Firebase 資料同步進來、定時重新檢查(見 periodicStatusCheck)、
+   以及使用者編輯截止日期/報告/任務內容欄位時。
+   delayLocked：一旦逾期未回報而被標記「延誤」，即使之後補了報告也不會自動跳回「執行中」，
+   避免看起來像是「補報告就能洗掉遲交紀錄」；但若截止日期被改到未來（不再逾期），
+   則視為管理員主動排除了這筆延誤，應自動解鎖並依當下條件重新判斷。 */
 function recomputeOne(t){
   if(t.status==="完成") return;
-  if(t.delayLocked){ t.status="延誤"; return; }
   const hasReport=(t.report||"").trim().length>0;
-  if(!hasReport && isOverdue(t.due)){ t.delayLocked=true; t.status="延誤"; }
+  const overdue=isOverdue(t.due);
+  if(t.delayLocked){
+    if(overdue){ t.status="延誤"; return; } /* 仍然逾期，維持延誤鎖定 */
+    t.delayLocked=false; /* 截止日期已改到未來，解鎖後往下重新判斷 */
+  }
+  if(!hasReport && overdue){ t.delayLocked=true; t.status="延誤"; }
   else if(hasReport){ t.status="執行中"; }
   else { t.status="待執行"; }
 }
 function recomputeAllStatuses(list){
-  list.forEach(recomputeOne);
+  let changed=false;
+  list.forEach(t=>{
+    const before = t.status+"|"+!!t.delayLocked;
+    recomputeOne(t);
+    if(before !== (t.status+"|"+!!t.delayLocked)) changed=true;
+  });
+  return changed;
 }
 
 /* ============================================================
@@ -484,8 +499,25 @@ function _maybeReady(){
     fbReady=true;
     recomputeAllStatuses(TASKS);
     recomputeAllStatuses(GENERAL);
+    startPeriodicStatusCheck();
   }
   renderApp();
+}
+
+/* 定時重新檢查延誤狀態：
+   避免分頁長時間開著不重新整理、也沒有人去編輯任何欄位時，
+   時間跨過截止日期卻沒有任何機制觸發重新判斷，導致「延誤」狀態一直不會出現。
+   每分鐘檢查一次即可，不需要更密集(截止日期最小顆粒度是「天」)。
+   只有真的有狀態改變時才重繪畫面，避免不必要的畫面刷新。 */
+let _periodicStatusTimer = null;
+function startPeriodicStatusCheck(){
+  if(_periodicStatusTimer) return;
+  _periodicStatusTimer = setInterval(function(){
+    if(!fbReady) return;
+    const c1=recomputeAllStatuses(TASKS);
+    const c2=recomputeAllStatuses(GENERAL);
+    if(c1||c2) renderApp();
+  }, 60000);
 }
 let _authUser = null; /* 目前登入的 firebase auth user 物件 */
 
@@ -556,6 +588,14 @@ function ensureDataListener(){
       if(!deepEqual(newGeneral,GENERAL)){ GENERAL=newGeneral; changed=true; }
       if(!deepEqual(newDeliv,DELIV_STATUS)){ DELIV_STATUS=newDeliv; changed=true; }
       if(!deepEqual(newHistory,HISTORY)){ HISTORY=newHistory; changed=true; }
+      /* 遠端資料異動(例如別人新增/修改了任務)時，若本地已經完成過首次載入，
+         針對這次同步進來的最新資料立即重新判斷一次延誤狀態，
+         避免要等到下次重新整理頁面才會反映最新的逾期情形 */
+      if(fbReady){
+        const c1=recomputeAllStatuses(TASKS);
+        const c2=recomputeAllStatuses(GENERAL);
+        if(c1||c2) changed=true;
+      }
     }
     dataReady=true;
     if(!changed && _dataHadFirstLoad){ return; } /* 內容跟目前畫面完全一樣，通常是自己剛寫入的回音，不用重繪 */
