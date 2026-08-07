@@ -580,11 +580,15 @@ function ensureDataListener(){
          同時記下每一筆資料「真正存放的位置」(_fbKey)——
          舊格式陣列資料存放的位置是「清單中的第幾個」，不等於資料自己記錄的編號(id)，
          之後任何更新/刪除都必須依照 _fbKey 這個真實位置操作，才不會寫到錯誤/不存在的位置。 */
-      const newProjects = d.PROJECTS ? Object.keys(d.PROJECTS).map(k=>Object.assign({},d.PROJECTS[k],{_fbKey:k})) : PROJECTS;
-      const newTasks    = d.TASKS    ? Object.keys(d.TASKS).map(k=>Object.assign({},d.TASKS[k],{_fbKey:k}))       : TASKS;
-      const newGeneral  = d.GENERAL  ? Object.keys(d.GENERAL).map(k=>Object.assign({},d.GENERAL[k],{_fbKey:k}))   : GENERAL;
-      const newDeliv    = d.DELIV_STATUS || DELIV_STATUS;
-      let newHistory = HISTORY;
+      /* 注意：Firebase 節點一旦被清到「一筆不剩」，快照裡這個 key 會整個消失(undefined)，
+         不會是空物件 {}。下面的 fallback 一律用「空陣列/空物件」，不能沿用舊的本地資料，
+         否則「清到最後一筆」時，其他人的畫面會誤判成資料沒變，導致最後一筆刪除/歸檔的任務
+         同步不到，卡在畫面上直到使用者手動點進去才會被動清掉。 */
+      const newProjects = d.PROJECTS ? Object.keys(d.PROJECTS).map(k=>Object.assign({},d.PROJECTS[k],{_fbKey:k})) : [];
+      const newTasks    = d.TASKS    ? Object.keys(d.TASKS).map(k=>Object.assign({},d.TASKS[k],{_fbKey:k}))       : [];
+      const newGeneral  = d.GENERAL  ? Object.keys(d.GENERAL).map(k=>Object.assign({},d.GENERAL[k],{_fbKey:k}))   : [];
+      const newDeliv    = d.DELIV_STATUS || {};
+      let newHistory = {};
       if(d.HISTORY){
         newHistory = {};
         Object.keys(d.HISTORY).forEach(scopeId=>{
