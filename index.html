@@ -135,6 +135,12 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 .badge.wip{background:var(--amber-bg);color:var(--amber-tx)}
 .badge.late{background:var(--red-bg);color:var(--red-tx)}
 .badge.done{background:var(--green-bg);color:var(--green-tx)}
+.delay-count{display:inline-flex;align-items:center;gap:2px;background:var(--amber-bg);color:var(--amber-tx);border-radius:10px;padding:1px 6px;font-size:10px;margin-left:4px;cursor:pointer;border:none;font-family:inherit;vertical-align:middle}
+.delay-count:hover{opacity:.8}
+.delay-hist-row{padding:8px 16px;background:var(--sur1);border-bottom:1px solid var(--bd);font-size:12px;color:var(--tx2)}
+.delay-hist-row .dh-title{font-size:11px;color:var(--tx3);margin-bottom:6px}
+.delay-hist-row .dh-item{display:flex;align-items:center;gap:8px;padding:2px 0}
+.delay-hist-row .dh-item .who{color:var(--tx3)}
 .ptag{display:inline-flex;align-items:center;gap:3px;background:var(--sur1);border-radius:20px;padding:2px 6px 2px 8px;font-size:11px;margin:1px}
 .ptag .x{cursor:pointer;color:var(--tx3);font-weight:700}
 .p-add{font-size:11px;color:var(--tx3);border:1px dashed var(--bd2);border-radius:20px;padding:2px 8px;background:none;cursor:pointer}
@@ -790,15 +796,36 @@ function removeDraftPerson(key,idx){
 /* 執行狀態欄位：一般使用者顯示唯讀徽章；管理員可用下拉選單自由變更（含直接標記完成→歸檔至歷程） */
 function statusCellHtml(t,kind,projId){
   const badgeCls = t.status==="完成"?"done":t.status==="執行中"?"wip":t.status==="延誤"?"late":"todo";
-  if(!currentUser || !currentUser.isAdmin){
-    return `<span class="badge ${badgeCls} no-print">${t.status}</span>`;
-  }
-  return `<select class="status-select no-print" onchange="adminChangeStatus('${kind}','${projId||""}','${t.id}',this.value)">
+  const badge = (!currentUser || !currentUser.isAdmin)
+    ? `<span class="badge ${badgeCls} no-print">${t.status}</span>`
+    : `<select class="status-select no-print" onchange="adminChangeStatus('${kind}','${projId||""}','${t.id}',this.value)">
     <option value="待執行" ${t.status==="待執行"?"selected":""}>待執行</option>
     <option value="執行中" ${t.status==="執行中"?"selected":""}>執行中</option>
     <option value="延誤" ${t.status==="延誤"?"selected":""}>延誤</option>
     <option value="完成" ${t.status==="完成"?"selected":""}>完成（歸檔）</option>
   </select>`;
+  return badge + delayCountBadgeHtml(t,kind);
+}
+/* 曾延誤過的任務，狀態欄位旁多一個可點擊的小角標「曾延誤 N 次」，所有登入者皆可見；
+   從沒延誤過的任務不顯示，不佔額外欄位空間 */
+function delayCountBadgeHtml(t,kind){
+  const n=(t.delayHistory||[]).length;
+  if(!n) return "";
+  return `<button type="button" class="delay-count no-print" onclick="toggleKey('delayhist_${kind}_${t.id}',true)" title="點擊查看展延歷史">曾延誤 ${n} 次</button>`;
+}
+function fmtDelayAt(iso){
+  const d=new Date(iso); if(isNaN(d.getTime())) return "";
+  const p=n=>String(n).padStart(2,"0");
+  return `${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+/* 展延歷史明細：只有展開時才渲染這一整列，收合時不佔畫面空間 */
+function delayHistPanelHtml(t,kind){
+  const key="delayhist_"+kind+"_"+t.id;
+  if(isClosed(key,true)) return "";
+  const items=(t.delayHistory||[]).map(h=>
+    `<div class="dh-item"><span>${esc(h.from)} → ${esc(h.to)}</span><span class="who">・${esc(h.by)}・${fmtDelayAt(h.at)}</span></div>`
+  ).join("");
+  return `<div class="delay-hist-row no-print"><div class="dh-title">展延歷史</div>${items}</div>`;
 }
 function adminChangeStatus(kind,projId,id,newStatus){
   if(!currentUser||!currentUser.isAdmin) return;
@@ -839,7 +866,7 @@ function taskRowHtml(t, kind, projId, displayNo){
       <button class="upd-btn" onclick="clearReport('${kind}','${t.id}')">更新</button>
     </div>
     <div class="t-cell c-act"><button class="del-btn" onclick="deleteTask('${kind}','${t.id}')">✕</button></div>
-  </div>`;
+  </div>${delayHistPanelHtml(t,kind)}`;
 }
 
 /* 收合/展開狀態：統一用「是否收合」為準，未設定過時套用預設值 */
@@ -1212,7 +1239,20 @@ function clearReport(kind,id){
 function updateExistingDue(kind,id,isoVal){
   const t=findTaskList(kind).find(x=>String(x.id)===String(id));
   if(!t) return;
+  const oldDue = t.due;
+  const wasDelayed = t.status==="延誤";
   t.due = clampDueNotPast(isoVal);
+  if(wasDelayed && t.due!==oldDue){
+    /* 延誤中的任務被展延：自動留下紀錄，不需使用者額外操作；
+       這筆紀錄不受之後 recomputeOne 影響，即使延誤狀態解除，紀錄依然保留 */
+    if(!Array.isArray(t.delayHistory)) t.delayHistory=[];
+    t.delayHistory.push({
+      from: oldDue||"",
+      to: t.due||"",
+      by: (currentUser&&currentUser.nickname)||"",
+      at: new Date().toISOString()
+    });
+  }
   recomputeOne(t); /* 截止日期變動可能影響延誤判斷，立即重新計算 */
   if(kind==="general") writeExistingGeneral(t); else writeExistingTask(t);
   renderApp();
