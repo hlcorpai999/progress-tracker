@@ -139,6 +139,9 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 .delay-count:hover{opacity:.8}
 .delay-hist-row{padding:8px 16px;background:var(--sur1);border-bottom:1px solid var(--bd);font-size:12px;color:var(--tx2)}
 .delay-hist-row .dh-title{font-size:11px;color:var(--tx3);margin-bottom:6px}
+.delay-hist-row .dh-episode{margin-bottom:6px}
+.delay-hist-row .dh-episode:last-child{margin-bottom:0}
+.delay-hist-row .dh-ep-title{font-size:11px;font-weight:700;color:var(--tx2);margin-bottom:2px}
 .delay-hist-row .dh-item{display:flex;align-items:center;gap:8px;padding:2px 0}
 .delay-hist-row .dh-item .who{color:var(--tx3)}
 .ptag{display:inline-flex;align-items:center;gap:3px;background:var(--sur1);border-radius:20px;padding:2px 6px 2px 8px;font-size:11px;margin:1px}
@@ -323,16 +326,28 @@ function clampDueNotPast(isoVal){
    （報告欄位只用來區分「還沒逾期」的情況下該顯示「待執行」還是「執行中」。）
    delayLocked：一旦被系統判定延誤，就鎖定在延誤，不會因為之後補了報告就自動跳回「執行中」；
    要解除延誤，必須由管理員把截止日期改到未來（不再逾期）——通常會同時一併把執行狀態
-   改回「執行中」，此時才會依當下條件重新判斷。 */
+   改回「執行中」，此時才會依當下條件重新判斷。
+   _delayEpisode：每次任務「真正從未鎖定狀態，第一次自然轉入延誤」時遞增 1，代表開啟
+   「第 N 次延誤事件」。這個編號用來把 updateExistingDue() 記錄的展延紀錄分組——同一次
+   延誤事件期間（不論當下是延誤還是已經被改回執行中），所有截止日期異動都算同一組，
+   直到任務再一次真正逾期觸發下一次延誤，才會開啟下一組。詳見 updateExistingDue()。 */
 function recomputeOne(t){
   if(t.status==="完成") return;
   const hasReport=(t.report||"").trim().length>0;
   const overdue=isOverdue(t.due);
   if(t.delayLocked){
-    if(overdue){ t.status="延誤"; return; } /* 仍然逾期，維持延誤鎖定 */
+    if(overdue){
+      if(!t._delayEpisode) t._delayEpisode=1; /* 相容舊資料：功能上線前就已延誤鎖定的任務，補上事件編號 */
+      t.status="延誤";
+      return; /* 仍然逾期，維持延誤鎖定 */
+    }
     t.delayLocked=false; /* 截止日期已改到未來，解鎖後往下重新判斷 */
   }
-  if(overdue){ t.delayLocked=true; t.status="延誤"; }
+  if(overdue){
+    t.delayLocked=true;
+    t.status="延誤";
+    t._delayEpisode=(t._delayEpisode||0)+1; /* 從未鎖定 -> 延誤，開啟新的一次延誤事件 */
+  }
   else if(hasReport){ t.status="執行中"; }
   else { t.status="待執行"; }
 }
@@ -807,9 +822,10 @@ function statusCellHtml(t,kind,projId){
   return badge + delayCountBadgeHtml(t,kind);
 }
 /* 曾延誤過的任務，狀態欄位旁多一個可點擊的小角標「曾延誤 N 次」，所有登入者皆可見；
+   N 是「延誤事件次數」(_delayEpisode)，不是異動筆數——同一次事件期間不管改了幾次日期都算 1 次。
    從沒延誤過的任務不顯示，不佔額外欄位空間 */
 function delayCountBadgeHtml(t,kind){
-  const n=(t.delayHistory||[]).length;
+  const n=t._delayEpisode||0;
   if(!n) return "";
   return `<button type="button" class="delay-count no-print" onclick="toggleKey('delayhist_${kind}_${t.id}',true)" title="點擊查看展延歷史">曾延誤 ${n} 次</button>`;
 }
@@ -818,14 +834,27 @@ function fmtDelayAt(iso){
   const p=n=>String(n).padStart(2,"0");
   return `${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
-/* 展延歷史明細：只有展開時才渲染這一整列，收合時不佔畫面空間 */
+/* 展延歷史明細：只有展開時才渲染這一整列，收合時不佔畫面空間。
+   依 episode 分組顯示「第 N 次延誤」，組內依時間先後列出每一筆異動；
+   舊資料若沒有 episode 欄位(本次功能上線初期留下的紀錄)，一律歸類到第 1 組，避免消失不見。 */
 function delayHistPanelHtml(t,kind){
   const key="delayhist_"+kind+"_"+t.id;
   if(isClosed(key,true)) return "";
-  const items=(t.delayHistory||[]).map(h=>
-    `<div class="dh-item"><span>${esc(h.from)} → ${esc(h.to)}</span><span class="who">・${esc(h.by)}・${fmtDelayAt(h.at)}</span></div>`
-  ).join("");
-  return `<div class="delay-hist-row no-print"><div class="dh-title">展延歷史</div>${items}</div>`;
+  const list=t.delayHistory||[];
+  const groups={};
+  list.forEach(h=>{
+    const ep=h.episode||1;
+    if(!groups[ep]) groups[ep]=[];
+    groups[ep].push(h);
+  });
+  const episodeNos=Object.keys(groups).map(Number).sort((a,b)=>a-b);
+  const body=episodeNos.map(ep=>{
+    const items=groups[ep].map(h=>
+      `<div class="dh-item"><span>${esc(h.from)} → ${esc(h.to)}</span><span class="who">・${esc(h.by)}・${fmtDelayAt(h.at)}</span></div>`
+    ).join("");
+    return `<div class="dh-episode"><div class="dh-ep-title">第 ${ep} 次延誤</div>${items}</div>`;
+  }).join("");
+  return `<div class="delay-hist-row no-print"><div class="dh-title">展延歷史</div>${body}</div>`;
 }
 function adminChangeStatus(kind,projId,id,newStatus){
   if(!currentUser||!currentUser.isAdmin) return;
@@ -1240,20 +1269,27 @@ function updateExistingDue(kind,id,isoVal){
   const t=findTaskList(kind).find(x=>String(x.id)===String(id));
   if(!t) return;
   const oldDue = t.due;
-  const wasDelayed = t.status==="延誤";
+  /* 只要這筆任務「曾經」自然觸發過延誤(_delayEpisode>0)，且目前這次延誤事件還沒有
+     被下一次真正逾期結算掉，就視為同一次延誤事件的延續，異動都要記錄——
+     不限於「當下狀態剛好是延誤」，也不限於「當天」，這樣才能同時涵蓋：
+     (a) 延誤發生後，同一次協商過程中來回微調好幾次截止日期
+     (b) 已經改回執行中後，還沒真正逾期前又偷偷再往後延一次（規避再次觸發延誤警示）
+     這兩種情況都要留下痕跡。 */
+  const openEpisode = t._delayEpisode||0;
   t.due = clampDueNotPast(isoVal);
-  if(wasDelayed && t.due!==oldDue){
-    /* 延誤中的任務被展延：自動留下紀錄，不需使用者額外操作；
-       這筆紀錄不受之後 recomputeOne 影響，即使延誤狀態解除，紀錄依然保留 */
+  if(openEpisode>0 && t.due!==oldDue){
+    /* 這筆紀錄不受之後 recomputeOne 影響，即使延誤狀態解除，紀錄依然保留；
+       episode 記錄當下的事件編號，供畫面依「第 N 次延誤」分組顯示 */
     if(!Array.isArray(t.delayHistory)) t.delayHistory=[];
     t.delayHistory.push({
+      episode: openEpisode,
       from: oldDue||"",
       to: t.due||"",
       by: (currentUser&&currentUser.nickname)||"",
       at: new Date().toISOString()
     });
   }
-  recomputeOne(t); /* 截止日期變動可能影響延誤判斷，立即重新計算 */
+  recomputeOne(t); /* 截止日期變動可能影響延誤判斷，立即重新計算(若真的又逾期，會在這裡開啟下一次延誤事件) */
   if(kind==="general") writeExistingGeneral(t); else writeExistingTask(t);
   renderApp();
 }
