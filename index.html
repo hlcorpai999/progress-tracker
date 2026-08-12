@@ -351,12 +351,21 @@ function recomputeOne(t){
   else if(hasReport){ t.status="執行中"; }
   else { t.status="待執行"; }
 }
-function recomputeAllStatuses(list){
+/* kind: "task" 或 "general"，用來知道異動的任務該寫回哪個 Firebase 節點；
+   不傳的話(例如某些呼叫端還沒更新)只更新本地畫面，不寫回資料庫，維持舊行為，安全相容。
+   比對範圍加入 _delayEpisode：避免「自動偵測到延誤，但只更新畫面沒有真的存進資料庫」的落差——
+   之前這個落差會導致重新整理頁面/別人觸發同步時，剛算出來的延誤狀態被資料庫裡的舊資料蓋掉，
+   造成「延誤已經顯示了，但曾延誤次數要等使用者真的手動改一次日期才會定住」的不一致現象。 */
+function recomputeAllStatuses(list,kind){
   let changed=false;
   list.forEach(t=>{
-    const before = t.status+"|"+!!t.delayLocked;
+    const before = t.status+"|"+!!t.delayLocked+"|"+(t._delayEpisode||0);
     recomputeOne(t);
-    if(before !== (t.status+"|"+!!t.delayLocked)) changed=true;
+    if(before !== (t.status+"|"+!!t.delayLocked+"|"+(t._delayEpisode||0))){
+      changed=true;
+      if(kind==="task") writeTask(t);
+      else if(kind==="general") writeGeneral(t);
+    }
   });
   return changed;
 }
@@ -520,8 +529,8 @@ function _maybeReady(){
   const needsData = currentUser && (currentUser.isAdmin || (!currentUser.pending && !currentUser.needsNickname));
   if(usersReady && (!needsData || dataReady) && !fbReady){
     fbReady=true;
-    recomputeAllStatuses(TASKS);
-    recomputeAllStatuses(GENERAL);
+    recomputeAllStatuses(TASKS,"task");
+    recomputeAllStatuses(GENERAL,"general");
   }
   /* 定時檢查的啟動判斷獨立於上面的 !fbReady 條件之外：
      原本寫在 if 區塊內，只有「fbReady 從 false 變 true 的那一次」會執行到；
@@ -544,8 +553,8 @@ function startPeriodicStatusCheck(){
   if(_periodicStatusTimer) return;
   _periodicStatusTimer = setInterval(function(){
     if(!fbReady) return;
-    const c1=recomputeAllStatuses(TASKS);
-    const c2=recomputeAllStatuses(GENERAL);
+    const c1=recomputeAllStatuses(TASKS,"task");
+    const c2=recomputeAllStatuses(GENERAL,"general");
     if(c1||c2) renderApp();
   }, 60000);
 }
@@ -626,8 +635,8 @@ function ensureDataListener(){
          針對這次同步進來的最新資料立即重新判斷一次延誤狀態，
          避免要等到下次重新整理頁面才會反映最新的逾期情形 */
       if(fbReady){
-        const c1=recomputeAllStatuses(TASKS);
-        const c2=recomputeAllStatuses(GENERAL);
+        const c1=recomputeAllStatuses(TASKS,"task");
+        const c2=recomputeAllStatuses(GENERAL,"general");
         if(c1||c2) changed=true;
       }
     }
@@ -1268,6 +1277,12 @@ function clearReport(kind,id){
 function updateExistingDue(kind,id,isoVal){
   const t=findTaskList(kind).find(x=>String(x.id)===String(id));
   if(!t) return;
+  /* 關鍵：先用「舊的」截止日期強制重新計算一次目前狀態。
+     避免使用者搶在系統下一次自動偵測(頁面載入/每分鐘定時檢查/資料同步)之前，
+     就直接把已經逾期、但畫面還沒來得及翻成「延誤」的任務日期改掉——
+     如果不這樣做，這次逾期永遠不會被正式判定成「延誤」，_delayEpisode 也就不會
+     遞增，等於整次延誤事件被跳過、憑空消失，不會出現在展延紀錄或角標次數裡。 */
+  recomputeOne(t);
   const oldDue = t.due;
   /* 只要這筆任務「曾經」自然觸發過延誤(_delayEpisode>0)，且目前這次延誤事件還沒有
      被下一次真正逾期結算掉，就視為同一次延誤事件的延續，異動都要記錄——
