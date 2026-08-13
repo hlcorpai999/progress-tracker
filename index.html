@@ -1283,9 +1283,19 @@ function round1(n){ return Math.round(n*10)/10; }
 function openEfficiencyPanel(){
   if(!currentUser||!currentUser.isAdmin) return;
   const stats=computeEfficiencyStats();
-  const names=Object.keys(stats).sort((a,b)=>a.localeCompare(b,"zh-Hant"));
+  /* 顯示哪些人，改成以「帳號管理」目前的已核准工程師名單為準，
+     不再用「誰出現在任務裡就列誰」——這樣可以同時滿足三個需求：
+     (1) 管理員本來就不在已核准名單裡（他是用 email 判斷身份，不走一般核准流程），
+         所以自然不會出現在報表，不需要另外寫排除規則。
+     (2) 目前 0 任務、0 完成的工程師也會顯示一列（數字全部是 0），
+         不會像之前一樣「沒被指派過任務就完全不存在」。
+     (3) 一旦某人從帳號管理移除，下次打開報表他就會連同歷史數字一併消失——
+         這是管理層確認過的刻意設計：報表只反映「目前在職工程師」的現況，
+         人不在了，歷史數字也就沒有留存的意義。 */
+  const names = Object.values(USERS).filter(u=>u.status==="approved").map(u=>u.nickname).sort((a,b)=>a.localeCompare(b,"zh-Hant"));
+  const zero = {openCount:0, completedCount:0, onTimeCount:0, onTimeEligible:0, delayEpisodeSum:0, cycleDaysSum:0, cycleDaysCount:0};
   const rows = names.length ? names.map(name=>{
-    const s=stats[name];
+    const s=stats[name]||zero;
     const onTimeRate = s.onTimeEligible>0.001 ? Math.round(s.onTimeCount/s.onTimeEligible*100)+"%" : "—";
     const avgDelay = s.completedCount>0.001 ? (s.delayEpisodeSum/s.completedCount).toFixed(2) : "—";
     const avgCycle = s.cycleDaysCount>0.001 ? round1(s.cycleDaysSum/s.cycleDaysCount)+" 天" : "資料不足";
@@ -1297,14 +1307,15 @@ function openEfficiencyPanel(){
       <td>${avgDelay}</td>
       <td>${avgCycle}</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="6" style="color:var(--tx3);font-size:12px;padding:10px 0">目前沒有可統計的資料</td></tr>`;
+  }).join("") : `<tr><td colspan="6" style="color:var(--tx3);font-size:12px;padding:10px 0">目前沒有已核准的工程師</td></tr>`;
   showModal(`
     <div class="modal-hd"><span>工作效率報表</span><button onclick="closeModal()">關閉</button></div>
     <div class="modal-body">
       <div style="font-size:11px;color:var(--tx3);margin-bottom:10px;line-height:1.7">
         多人指派的任務，任務量／延誤次數／處理天數會依人數均分計入每個人。「平均延誤次數」是最不容易被展延規避的指標，
         建議優先參考這一項；「準時完成率」容易受展延截止日期影響，僅供參考。「平均處理天數」需要任務有記錄起始時間，
-        本功能上線前建立的舊任務沒有這筆資料，會顯示「資料不足」，之後新建立的任務會逐步累積。
+        本功能上線前建立的舊任務沒有這筆資料，會顯示「資料不足」，之後新建立的任務會逐步累積。管理員不列入統計；
+        名單與「帳號管理」的已核准工程師同步，工程師被移除後即不再顯示。
       </div>
       <table class="eff-table">
         <thead><tr><th>姓名</th><th>目前任務量</th><th>已完成任務數</th><th>準時完成率</th><th>平均延誤次數</th><th>平均處理天數</th></tr></thead>
