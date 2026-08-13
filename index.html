@@ -174,6 +174,10 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 .mini-hd{font-size:11px;color:var(--tx3);margin:12px 0 6px}
 .person-list-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--bd)}
 .person-list-row:last-child{border-bottom:none}
+.eff-table{width:100%;border-collapse:collapse;font-size:12px}
+.eff-table th{text-align:left;color:var(--tx3);font-weight:500;padding:6px 8px;border-bottom:1px solid var(--bd2);white-space:nowrap}
+.eff-table td{padding:7px 8px;border-bottom:1px solid var(--bd);white-space:nowrap}
+.eff-table tr:last-child td{border-bottom:none}
 
 .gate-screen{max-width:420px;margin:80px auto;text-align:center;padding:30px}
 .gate-screen input{width:100%;padding:10px;margin:10px 0;border-radius:var(--radius);border:1px solid var(--bd2)}
@@ -746,11 +750,11 @@ function confirmAddTask(key){
   const taskText=(d.task||"").trim();
   if(!taskText){ toast("請輸入作業內容"); return; }
   if(d.kind==="general"){
-    const t={id:newDataId("GENERAL"),task:taskText,due:d.due||todayDueDefault(),persons:d.persons||[],report:"",status:"待執行",delayLocked:false};
+    const t={id:newDataId("GENERAL"),task:taskText,due:d.due||todayDueDefault(),persons:d.persons||[],report:"",status:"待執行",delayLocked:false,createdAt:new Date().toISOString()};
     GENERAL.push(t);
     writeGeneral(t);
   } else {
-    const t={id:newDataId("TASKS"),proj:d.proj,wi:d.wi,task:taskText,due:d.due||todayDueDefault(),persons:d.persons||[],report:"",status:"待執行",delayLocked:false};
+    const t={id:newDataId("TASKS"),proj:d.proj,wi:d.wi,task:taskText,due:d.due||todayDueDefault(),persons:d.persons||[],report:"",status:"待執行",delayLocked:false,createdAt:new Date().toISOString()};
     TASKS.push(t);
     writeTask(t);
   }
@@ -1162,12 +1166,12 @@ function unarchiveHistoryEntry(scopeId, entryKey){
   if(!confirm(`確定要將「${e.task}」從歷程復原回作業清單嗎？`)) return;
 
   if(scopeId==="__general"){
-    const t = {id:newDataId("GENERAL"), task:e.task, due:todayDueDefault(), persons:e.persons||[], report:e.report||"", status:"待執行", delayLocked:false};
+    const t = {id:newDataId("GENERAL"), task:e.task, due:todayDueDefault(), persons:e.persons||[], report:e.report||"", status:"待執行", delayLocked:false, createdAt:new Date().toISOString()};
     recomputeOne(t);
     GENERAL.push(t);
     writeGeneral(t);
   } else {
-    const t = {id:newDataId("TASKS"), proj:scopeId, wi:e.wi||"", task:e.task, due:todayDueDefault(), persons:e.persons||[], report:e.report||"", status:"待執行", delayLocked:false};
+    const t = {id:newDataId("TASKS"), proj:scopeId, wi:e.wi||"", task:e.task, due:todayDueDefault(), persons:e.persons||[], report:e.report||"", status:"待執行", delayLocked:false, createdAt:new Date().toISOString()};
     recomputeOne(t);
     TASKS.push(t);
     writeTask(t);
@@ -1219,6 +1223,94 @@ function rejectUser(k){ if(USERS[k]){ delete USERS[k]; pushUserRecord(k, null); 
 function removeUser(k){
   if(!confirm("確定要移除這位工程師的編輯權限嗎？")) return;
   if(USERS[k]){ delete USERS[k]; pushUserRecord(k, null); openAdminPanel(); renderApp(); toast("已移除"); }
+}
+
+/* ============================================================
+   工作效率報表（管理員專用）
+   ------------------------------------------------------------
+   設計重點：
+   - 多人指派的任務，任務量/延誤次數/處理天數一律「均分」計入每個指派人
+     （2 人指派算每人 0.5 筆），不做主觀的責任判斷。
+   - 「準時完成率」是拿「完成時的截止日期」跟「完成日期」比對，這個指標
+     容易被「一直展延截止日期」規避掉（反正最後都準時），所以只能當參考。
+   - 「平均延誤次數」用的是 _delayEpisode（歸檔時存進 delayEpisode），
+     這個數字只有任務「真的逾期」才會累加，不會因為後來展延就消失，
+     是這份報表裡最不容易被規避、最真實反映實際狀況的指標。
+   - 「平均處理天數」需要任務有 createdAt（起始時間）才能計算；這個欄位
+     是這次才開始記錄的，上線前建立的舊任務沒有這筆資料，暫時無法納入。
+   ============================================================ */
+function computeEfficiencyStats(){
+  const stats = {};
+  function ensure(name){
+    if(!stats[name]) stats[name]={openCount:0, completedCount:0, onTimeCount:0, onTimeEligible:0, delayEpisodeSum:0, cycleDaysSum:0, cycleDaysCount:0};
+    return stats[name];
+  }
+  /* 目前手上還在跑的任務量 */
+  TASKS.concat(GENERAL).forEach(t=>{
+    const persons=(t.persons||[]);
+    if(!persons.length) return;
+    const w=1/persons.length;
+    persons.forEach(p=>{ ensure(p).openCount += w; });
+  });
+  /* 已完成（歸檔）的任務 */
+  Object.keys(HISTORY).forEach(scopeId=>{
+    (HISTORY[scopeId]||[]).forEach(h=>{
+      const persons=(h.persons||[]);
+      if(!persons.length) return;
+      const w=1/persons.length;
+      const dueDt=parseDue(h.due), doneDt=parseDue(h.completedDate);
+      const onTime = (dueDt && doneDt) ? (doneDt.getTime()<=dueDt.getTime()) : null;
+      let cycleDays=null;
+      if(h.createdAt && doneDt){
+        const start=new Date(h.createdAt);
+        if(!isNaN(start.getTime())){
+          const startMid=new Date(start.getFullYear(),start.getMonth(),start.getDate()).getTime();
+          cycleDays=Math.max(0, Math.round((doneDt.getTime()-startMid)/86400000));
+        }
+      }
+      persons.forEach(p=>{
+        const s=ensure(p);
+        s.completedCount += w;
+        if(onTime!==null){ s.onTimeEligible += w; if(onTime) s.onTimeCount += w; }
+        s.delayEpisodeSum += (h.delayEpisode||0)*w;
+        if(cycleDays!==null){ s.cycleDaysSum += cycleDays*w; s.cycleDaysCount += w; }
+      });
+    });
+  });
+  return stats;
+}
+function round1(n){ return Math.round(n*10)/10; }
+function openEfficiencyPanel(){
+  if(!currentUser||!currentUser.isAdmin) return;
+  const stats=computeEfficiencyStats();
+  const names=Object.keys(stats).sort((a,b)=>a.localeCompare(b,"zh-Hant"));
+  const rows = names.length ? names.map(name=>{
+    const s=stats[name];
+    const onTimeRate = s.onTimeEligible>0.001 ? Math.round(s.onTimeCount/s.onTimeEligible*100)+"%" : "—";
+    const avgDelay = s.completedCount>0.001 ? (s.delayEpisodeSum/s.completedCount).toFixed(2) : "—";
+    const avgCycle = s.cycleDaysCount>0.001 ? round1(s.cycleDaysSum/s.cycleDaysCount)+" 天" : "資料不足";
+    return `<tr>
+      <td>${esc(name)}</td>
+      <td>${round1(s.openCount)}</td>
+      <td>${round1(s.completedCount)}</td>
+      <td>${onTimeRate}</td>
+      <td>${avgDelay}</td>
+      <td>${avgCycle}</td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="6" style="color:var(--tx3);font-size:12px;padding:10px 0">目前沒有可統計的資料</td></tr>`;
+  showModal(`
+    <div class="modal-hd"><span>工作效率報表</span><button onclick="closeModal()">關閉</button></div>
+    <div class="modal-body">
+      <div style="font-size:11px;color:var(--tx3);margin-bottom:10px;line-height:1.7">
+        多人指派的任務，任務量／延誤次數／處理天數會依人數均分計入每個人。「平均延誤次數」是最不容易被展延規避的指標，
+        建議優先參考這一項；「準時完成率」容易受展延截止日期影響，僅供參考。「平均處理天數」需要任務有記錄起始時間，
+        本功能上線前建立的舊任務沒有這筆資料，會顯示「資料不足」，之後新建立的任務會逐步累積。
+      </div>
+      <table class="eff-table">
+        <thead><tr><th>姓名</th><th>目前任務量</th><th>已完成任務數</th><th>準時完成率</th><th>平均延誤次數</th><th>平均處理天數</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`);
 }
 
 /* ============================================================
@@ -1332,14 +1424,14 @@ function adminComplete(kind,proj,id){
     if(kind==="general"){
       const idx=GENERAL.findIndex(x=>String(x.id)===String(id)); if(idx<0) return;
       const tt=GENERAL[idx];
-      addHistoryEntry("__general", {wiLabel:"",wi:"",task:tt.task,due:tt.due||"",completedDate:todayStr(),persons:tt.persons||[],report:tt.report||""});
+      addHistoryEntry("__general", {wiLabel:"",wi:"",task:tt.task,due:tt.due||"",completedDate:todayStr(),persons:tt.persons||[],report:tt.report||"",createdAt:tt.createdAt||"",delayEpisode:tt._delayEpisode||0});
       GENERAL.splice(idx,1);
       removeGeneralRecord(tt);
     } else {
       const idx=TASKS.findIndex(x=>String(x.id)===String(id)); if(idx<0) return;
       const tt=TASKS[idx];
       const w=workitemById(tt.wi);
-      addHistoryEntry(tt.proj, {wiLabel:w?w.label:"",wi:tt.wi||"",task:tt.task,due:tt.due||"",completedDate:todayStr(),persons:tt.persons||[],report:tt.report||""});
+      addHistoryEntry(tt.proj, {wiLabel:w?w.label:"",wi:tt.wi||"",task:tt.task,due:tt.due||"",completedDate:todayStr(),persons:tt.persons||[],report:tt.report||"",createdAt:tt.createdAt||"",delayEpisode:tt._delayEpisode||0});
       TASKS.splice(idx,1);
       removeTaskRecord(tt);
     }
@@ -1417,7 +1509,8 @@ function renderHeader(){
     <div class="admin-btn">
       <button onclick="openAdminPanel()">⚙ 管理</button>
       ${pc>0?`<span class="admin-badge">${pc}</span>`:""}
-    </div>` : "";
+    </div>
+    <button onclick="openEfficiencyPanel()">📊 效率報表</button>` : "";
   return `<div class="card top-card">
     <div class="top-row">
       <div>
