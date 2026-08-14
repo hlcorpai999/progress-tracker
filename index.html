@@ -188,9 +188,14 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 
 .print-only-text{display:none}
 
+.update-banner{position:fixed;top:0;left:0;right:0;z-index:9999;background:#1f2937;color:#fff;display:flex;align-items:center;justify-content:center;gap:14px;padding:10px 16px;font-size:13px;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+.update-banner button{border:none;border-radius:6px;padding:5px 14px;font-size:12px;cursor:pointer}
+.update-banner .refresh-btn{background:#fff;color:#1f2937;font-weight:600}
+.update-banner .dismiss-btn{background:transparent;color:#cbd5e1;text-decoration:underline}
+
 @media print{
   @page{ size: landscape; }
-  .filter-bar,.stats-bar .stat-chip,.admin-btn,.add-task-btn,.del-btn,.p-add,.ptag .x,.upd-btn,.admin-controls,.history-btn,.proj-del-btn,.add-proj-link{display:none!important}
+  .filter-bar,.stats-bar .stat-chip,.admin-btn,.add-task-btn,.del-btn,.p-add,.ptag .x,.upd-btn,.admin-controls,.history-btn,.proj-del-btn,.add-proj-link,.update-banner{display:none!important}
   .no-print{display:none!important}
   .print-only-text{display:inline!important;font-size:12px}
 }
@@ -208,6 +213,11 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
 /* ============================================================
    先進發展部 專案暨任務管理系統
    ============================================================ */
+/* 版本號：每次修改、部署新版 index.html 前，務必手動更新這個字串
+   （建議格式：YYYY-MM-DD-序號，同一天多次部署用序號區分）。
+   這是「版本自動偵測」機制比對新舊版本的唯一依據，忘記更新的話，
+   即使部署了新程式碼，使用者端也不會被提示要重新整理。 */
+const APP_VERSION = "2026-08-14-1";
 
 const ADMIN_EMAIL = "richard1045745003@gmail.com";
 const ADMIN_NICKNAME = "Richard"; /* 管理員本人也是部門成員，可被指派為責任人 */
@@ -1312,10 +1322,10 @@ function openEfficiencyPanel(){
     <div class="modal-hd"><span>工作效率報表</span><button onclick="closeModal()">關閉</button></div>
     <div class="modal-body">
       <div style="font-size:11px;color:var(--tx3);margin-bottom:10px;line-height:1.7">
-        多人指派的任務，任務量／延誤次數／處理天數會依人數均分計入每個人。「平均延誤次數」是最不容易被展延規避的指標，
-        建議優先參考這一項；「準時完成率」容易受展延截止日期影響，僅供參考。「平均處理天數」需要任務有記錄起始時間，
-        本功能上線前建立的舊任務沒有這筆資料，會顯示「資料不足」，之後新建立的任務會逐步累積。管理員不列入統計；
-        名單與「帳號管理」的已核准工程師同步，工程師被移除後即不再顯示。
+        任務量／延誤次數／處理天數：多人指派採均分計算。<br>
+        準時完成率＝準時任務數（完成日期≤截止日期）÷ 已完成任務數。<br>
+        平均延誤次數＝延誤事件數 ÷ 完成任務數。<br>
+        平均處理天數＝完成日期－起始時間，取平均。
       </div>
       <table class="eff-table">
         <thead><tr><th>姓名</th><th>目前任務量</th><th>已完成任務數</th><th>準時完成率</th><th>平均延誤次數</th><th>平均處理天數</th></tr></thead>
@@ -1708,6 +1718,41 @@ function syncTimelineLines(){
     line.style.display = "block";
   });
 }
+
+/* ============================================================
+   版本自動偵測
+   ------------------------------------------------------------
+   原理：定時重新向伺服器要一份「不從快取拿」的 index.html，
+   用簡單的文字比對抓出裡面的 APP_VERSION 字串，跟目前這個分頁
+   當初載入時的版本比較，不一樣就代表 GitHub 上已經有新版部署了。
+   故意不自動強制重新整理，而是跳一個不擋住操作的提示橫幅，
+   讓使用者自己選時機按——避免正在編輯欄位打到一半的內容被洗掉。
+   ============================================================ */
+let _updateBannerShown = false;
+function checkForNewVersion(){
+  if(_updateBannerShown) return; /* 已經提示過了，不用再檢查 */
+  fetch(location.pathname + "?_v=" + Date.now(), {cache:"no-store"})
+    .then(r=>r.text())
+    .then(html=>{
+      const m = html.match(/const APP_VERSION\s*=\s*"([^"]+)"/);
+      if(m && m[1] && m[1]!==APP_VERSION) showUpdateBanner();
+    })
+    .catch(()=>{}); /* 網路問題就靜默跳過，等下一次定時再檢查 */
+}
+function showUpdateBanner(){
+  if(_updateBannerShown) return;
+  _updateBannerShown = true;
+  const bar=document.createElement("div");
+  bar.className="update-banner";
+  bar.innerHTML=`<span>系統已經有新版本更新</span>
+    <button class="refresh-btn" onclick="location.reload()">立即重新整理</button>
+    <button class="dismiss-btn" onclick="this.parentElement.remove()">稍後再說</button>`;
+  document.body.appendChild(bar);
+}
+setInterval(checkForNewVersion, 5*60*1000); /* 每 5 分鐘定時檢查一次 */
+document.addEventListener("visibilitychange", function(){
+  if(document.visibilityState==="visible") checkForNewVersion(); /* 分頁切回來時，順便馬上檢查一次 */
+});
 
 /* 逾時保護：超過 8 秒還沒讀到資料，顯示明確錯誤畫面而不是一直卡住 */
 setTimeout(function(){
