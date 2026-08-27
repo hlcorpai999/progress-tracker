@@ -217,7 +217,7 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
    （建議格式：YYYY-MM-DD-序號，同一天多次部署用序號區分）。
    這是「版本自動偵測」機制比對新舊版本的唯一依據，忘記更新的話，
    即使部署了新程式碼，使用者端也不會被提示要重新整理。 */
-const APP_VERSION = "2026-08-14";
+const APP_VERSION = "2026-08-27-1";
 
 const ADMIN_EMAIL = "richard1045745003@gmail.com";
 const ADMIN_NICKNAME = "Richard"; /* 管理員本人也是部門成員，可被指派為責任人 */
@@ -1154,14 +1154,35 @@ function openHistory(scopeId){
     ${isAdmin?`<td><button onclick="unarchiveHistoryEntry('${scopeId}','${e._key||idx}')">取消歸檔</button></td>`:""}
   </tr>`).join("");
   const title = scopeId==="__general" ? "一般事務工作 歷程" : ((PROJECTS.find(p=>p.id===scopeId)||{}).name||scopeId)+" 歷程";
+  /* 「一般事務工作」沒有像「開發專案」那樣可以整個刪除、連帶清掉歷程的操作，
+     只能靠一筆一筆「取消歸檔→刪除」才能清空，非常不合理，所以只針對這個
+     scope 加一顆管理員專用的「全部清除」按鈕，直接整包刪除歷程節點
+     （跟 deleteProject() 刪除專案時清掉歷程的手法一致）。 */
+  const clearAllBtn = (scopeId==="__general" && isAdmin && entries.length>0)
+    ? `<button onclick="clearGeneralHistory()">🗑 全部清除</button>` : "";
   showModal(`
-    <div class="modal-hd"><span>${title}</span><button onclick="closeModal()">關閉</button></div>
+    <div class="modal-hd"><span>${title}</span>${clearAllBtn}<button onclick="closeModal()">關閉</button></div>
     <div class="modal-body">
       <table class="hist-table">
         <thead><tr><th>工作項目</th><th>作業內容</th><th>完成日期</th><th>責任人</th><th>執行情況說明</th>${isAdmin?"<th></th>":""}</tr></thead>
         <tbody>${rows || `<tr><td colspan="${isAdmin?6:5}" style="color:var(--tx3)">尚無歷程紀錄</td></tr>`}</tbody>
       </table>
     </div>`);
+}
+
+/* 一般事務工作歷程「全部清除」：僅管理員可用，整包刪除 HISTORY["__general"]，
+   不需要再一筆一筆取消歸檔後才能刪除；此動作只影響歷程節點，
+   跟目前任務清單(GENERAL)、開發專案(PROJECTS/TASKS)完全無關。 */
+function clearGeneralHistory(){
+  if(!currentUser||!currentUser.isAdmin) return;
+  const entries = HISTORY["__general"]||[];
+  if(!entries.length) return;
+  if(!confirm(`確定要清除「一般事務工作」的全部歷程紀錄嗎？共 ${entries.length} 筆，此動作無法復原。`)) return;
+  delete HISTORY["__general"];
+  _writeDataPath("HISTORY/__general", null);
+  closeModal();
+  renderApp();
+  toast("已清除全部歷程紀錄");
 }
 
 /* 取消歸檔：把歷程裡的紀錄復原回原本的作業清單，重新變成可編輯、可追蹤的任務
