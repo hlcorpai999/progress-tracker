@@ -217,7 +217,7 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
    （建議格式：YYYY-MM-DD-序號，同一天多次部署用序號區分）。
    這是「版本自動偵測」機制比對新舊版本的唯一依據，忘記更新的話，
    即使部署了新程式碼，使用者端也不會被提示要重新整理。 */
-const APP_VERSION = "2026-08-27-1";
+const APP_VERSION = "2026-09-07-1";
 
 const ADMIN_EMAIL = "richard1045745003@gmail.com";
 const ADMIN_NICKNAME = "Richard"; /* 管理員本人也是部門成員，可被指派為責任人 */
@@ -377,11 +377,29 @@ function recomputeAllStatuses(list,kind){
     recomputeOne(t);
     if(before !== (t.status+"|"+!!t.delayLocked+"|"+(t._delayEpisode||0))){
       changed=true;
-      if(kind==="task") writeTask(t);
-      else if(kind==="general") writeGeneral(t);
+      if(kind==="task") _writeRecomputedIfExists("TASKS/"+(t._fbKey||t.id), _stripFbKey(t), "task", t.id);
+      else if(kind==="general") _writeRecomputedIfExists("GENERAL/"+(t._fbKey||t.id), _stripFbKey(t), "general", t.id);
     }
   });
   return changed;
+}
+/* 自動偵測(定時檢查/資料同步)寫回資料庫專用：跟使用者主動編輯用的 _writeExisting() 一樣，
+   先確認資料庫裡這筆資料還存在才真的寫入，避免「這台電腦手上還留著舊資料、但其實已經被
+   別人歸檔/刪除了」的情況下，被這個自動寫回動作意外把已刪除的任務救回資料庫——
+   這曾經造成「歸檔後任務仍存在、取消歸檔後出現雙胞胎」的真實 bug，修正後不再直接呼叫
+   writeTask()/writeGeneral()，而是先確認再寫，且不像 _writeExisting() 那樣跳警語 toast
+   （因為這是背景自動動作，不是使用者主動編輯，跳「您的異動未儲存」反而會讓人一頭霧水）。
+   確認資料已經不存在時，順便把它從本地清單移除，避免留著幽靈資料。 */
+function _writeRecomputedIfExists(relPath, value, kind, id){
+  _dataRef.child(relPath).once("value").then(function(snap){
+    if(snap.val()===null){
+      if(kind==="task") TASKS=TASKS.filter(x=>String(x.id)!==String(id));
+      else GENERAL=GENERAL.filter(x=>String(x.id)!==String(id));
+      renderApp();
+      return;
+    }
+    return _dataRef.child(relPath).set(stripUndefinedDeep(value));
+  }).catch(()=>{});
 }
 
 /* ============================================================
