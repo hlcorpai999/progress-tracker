@@ -217,7 +217,7 @@ select,input[type=text],input:not([type]){border:1px solid var(--bd2);border-rad
    （建議格式：YYYY-MM-DD-序號，同一天多次部署用序號區分）。
    這是「版本自動偵測」機制比對新舊版本的唯一依據，忘記更新的話，
    即使部署了新程式碼，使用者端也不會被提示要重新整理。 */
-const APP_VERSION = "26.09.01";
+const APP_VERSION = "26.10.01";
 
 const ADMIN_EMAIL = "richard1045745003@gmail.com";
 const ADMIN_NICKNAME = "Richard"; /* 管理員本人也是部門成員，可被指派為責任人 */
@@ -1277,52 +1277,49 @@ function removeUser(k){
 /* ============================================================
    工作效率報表（管理員專用）
    ------------------------------------------------------------
-   設計重點：
-   - 多人指派的任務，任務量/延誤次數/處理天數一律「均分」計入每個指派人
-     （2 人指派算每人 0.5 筆），不做主觀的責任判斷。
-   - 「準時完成率」是拿「完成時的截止日期」跟「完成日期」比對，這個指標
-     容易被「一直展延截止日期」規避掉（反正最後都準時），所以只能當參考。
-   - 「平均延誤次數」用的是 _delayEpisode（歸檔時存進 delayEpisode），
-     這個數字只有任務「真的逾期」才會累加，不會因為後來展延就消失，
-     是這份報表裡最不容易被規避、最真實反映實際狀況的指標。
-   - 「平均處理天數」需要任務有 createdAt（起始時間）才能計算；這個欄位
-     是這次才開始記錄的，上線前建立的舊任務沒有這筆資料，暫時無法納入。
+   只保留三個指標（管理層確認：工程師已養成提早關注時程、提前提出展延的習慣，
+   準時率／平均延誤次數／平均處理天數已無法反映真實貢獻，貢獻度也因為任務難度、
+   職務代理等因素無法公平量化，所以不做）：
+   - 目前任務量：目前還在跑的任務（TASKS+GENERAL）
+   - 已完成任務數：歷程(HISTORY)裡的歸檔任務
+   - 累積延誤次數：目前任務的 _delayEpisode ＋ 歷程任務歸檔時保留的 delayEpisode
+   - 每週平均完成數：過去 28 天(滾動，含今天)內歸檔的任務數 ÷ 4，用來讓管理員與工程師
+     對照「實際每週消化多少案子」。完成日期是管理員按「完成(歸檔)」的日期；
+     若清除歷程或刪除專案，這段期間的完成數也會跟著減少。
+   多人指派的任務，三個數字一律「均分」計入每個指派人（2 人指派算每人 0.5）。
+   顯示名單以「帳號管理」目前已核准的工程師為準（管理員不列入，被移除者連同數字消失）。
    ============================================================ */
 function computeEfficiencyStats(){
   const stats = {};
   function ensure(name){
-    if(!stats[name]) stats[name]={openCount:0, completedCount:0, onTimeCount:0, onTimeEligible:0, delayEpisodeSum:0, cycleDaysSum:0, cycleDaysCount:0};
+    if(!stats[name]) stats[name]={openCount:0, completedCount:0, delayTotal:0, recentDone:0};
     return stats[name];
   }
-  /* 目前手上還在跑的任務量 */
+  /* 目前手上還在跑的任務：任務量 ＋ 目前已累積的延誤次數 */
   TASKS.concat(GENERAL).forEach(t=>{
     const persons=(t.persons||[]);
     if(!persons.length) return;
     const w=1/persons.length;
-    persons.forEach(p=>{ ensure(p).openCount += w; });
+    persons.forEach(p=>{
+      const s=ensure(p);
+      s.openCount += w;
+      s.delayTotal += (t._delayEpisode||0)*w;
+    });
   });
-  /* 已完成（歸檔）的任務 */
+  /* 已完成（歸檔）的任務：完成數 ＋ 歸檔時保留的延誤次數 ＋ 近 28 天完成數 */
+  const todayMid=new Date(); todayMid.setHours(0,0,0,0);
+  const cutoff=todayMid.getTime()-27*86400000; /* 含今天共 28 天 */
   Object.keys(HISTORY).forEach(scopeId=>{
     (HISTORY[scopeId]||[]).forEach(h=>{
       const persons=(h.persons||[]);
       if(!persons.length) return;
       const w=1/persons.length;
-      const dueDt=parseDue(h.due), doneDt=parseDue(h.completedDate);
-      const onTime = (dueDt && doneDt) ? (doneDt.getTime()<=dueDt.getTime()) : null;
-      let cycleDays=null;
-      if(h.createdAt && doneDt){
-        const start=new Date(h.createdAt);
-        if(!isNaN(start.getTime())){
-          const startMid=new Date(start.getFullYear(),start.getMonth(),start.getDate()).getTime();
-          cycleDays=Math.max(0, Math.round((doneDt.getTime()-startMid)/86400000));
-        }
-      }
+      const doneDt=parseDue(h.completedDate);
       persons.forEach(p=>{
         const s=ensure(p);
         s.completedCount += w;
-        if(onTime!==null){ s.onTimeEligible += w; if(onTime) s.onTimeCount += w; }
-        s.delayEpisodeSum += (h.delayEpisode||0)*w;
-        if(cycleDays!==null){ s.cycleDaysSum += cycleDays*w; s.cycleDaysCount += w; }
+        s.delayTotal += (h.delayEpisode||0)*w;
+        if(doneDt && doneDt.getTime()>=cutoff && doneDt.getTime()<=todayMid.getTime()) s.recentDone += w;
       });
     });
   });
@@ -1332,42 +1329,25 @@ function round1(n){ return Math.round(n*10)/10; }
 function openEfficiencyPanel(){
   if(!currentUser||!currentUser.isAdmin) return;
   const stats=computeEfficiencyStats();
-  /* 顯示哪些人，改成以「帳號管理」目前的已核准工程師名單為準，
-     不再用「誰出現在任務裡就列誰」——這樣可以同時滿足三個需求：
-     (1) 管理員本來就不在已核准名單裡（他是用 email 判斷身份，不走一般核准流程），
-         所以自然不會出現在報表，不需要另外寫排除規則。
-     (2) 目前 0 任務、0 完成的工程師也會顯示一列（數字全部是 0），
-         不會像之前一樣「沒被指派過任務就完全不存在」。
-     (3) 一旦某人從帳號管理移除，下次打開報表他就會連同歷史數字一併消失——
-         這是管理層確認過的刻意設計：報表只反映「目前在職工程師」的現況，
-         人不在了，歷史數字也就沒有留存的意義。 */
+  /* 顯示名單以「帳號管理」目前已核准的工程師為準：管理員本來就不在核准名單裡所以不會出現；
+     0 任務的工程師也會顯示一列；被移除的人連同歷史數字一併消失（管理層確認過的設計）。 */
   const names = Object.values(USERS).filter(u=>u.status==="approved").map(u=>u.nickname).sort((a,b)=>a.localeCompare(b,"zh-Hant"));
-  const zero = {openCount:0, completedCount:0, onTimeCount:0, onTimeEligible:0, delayEpisodeSum:0, cycleDaysSum:0, cycleDaysCount:0};
+  const zero = {openCount:0, completedCount:0, delayTotal:0, recentDone:0};
   const rows = names.length ? names.map(name=>{
     const s=stats[name]||zero;
-    const onTimeRate = s.onTimeEligible>0.001 ? Math.round(s.onTimeCount/s.onTimeEligible*100)+"%" : "—";
-    const avgDelay = s.completedCount>0.001 ? (s.delayEpisodeSum/s.completedCount).toFixed(2) : "—";
-    const avgCycle = s.cycleDaysCount>0.001 ? round1(s.cycleDaysSum/s.cycleDaysCount)+" 天" : "資料不足";
     return `<tr>
       <td>${esc(name)}</td>
       <td>${round1(s.openCount)}</td>
       <td>${round1(s.completedCount)}</td>
-      <td>${onTimeRate}</td>
-      <td>${avgDelay}</td>
-      <td>${avgCycle}</td>
+      <td>${round1(s.delayTotal)}</td>
+      <td>${round1(s.recentDone/4)}</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="6" style="color:var(--tx3);font-size:12px;padding:10px 0">目前沒有已核准的工程師</td></tr>`;
+  }).join("") : `<tr><td colspan="5" style="color:var(--tx3);font-size:12px;padding:10px 0">目前沒有已核准的工程師</td></tr>`;
   showModal(`
     <div class="modal-hd"><span>工作效率報表</span><button onclick="closeModal()">關閉</button></div>
     <div class="modal-body">
-      <div style="font-size:11px;color:var(--tx3);margin-bottom:10px;line-height:1.7">
-        任務量／延誤次數／處理天數：多人指派採均分計算。<br>
-        準時完成率＝準時任務數（完成日期≤截止日期）÷ 已完成任務數。<br>
-        平均延誤次數＝延誤事件數 ÷ 完成任務數。<br>
-        平均處理天數＝完成日期－起始時間，取平均。
-      </div>
       <table class="eff-table">
-        <thead><tr><th>姓名</th><th>目前任務量</th><th>已完成任務數</th><th>準時完成率</th><th>平均延誤次數</th><th>平均處理天數</th></tr></thead>
+        <thead><tr><th>姓名</th><th>目前任務量</th><th>已完成任務數</th><th>累積延誤次數</th><th>每週平均完成數</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`);
